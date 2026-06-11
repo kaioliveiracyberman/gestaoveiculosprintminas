@@ -1,0 +1,11 @@
+{
+  "name": "print-minas",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/generate-config.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

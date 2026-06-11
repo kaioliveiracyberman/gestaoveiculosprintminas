@@ -14,8 +14,13 @@ function showTab(tab){
 
 function showAlert(msg, type='success'){
   alertMsg = {msg, type};
-  setTimeout(()=>{ alertMsg=null; showTab(activeTab); }, 2800);
   showTab(activeTab);
+  setTimeout(()=>{
+    alertMsg=null;
+    // remove alert element directly to avoid heavy re-render of the whole tab
+    const el = document.querySelector('.alert');
+    if(el && el.parentNode) el.parentNode.removeChild(el);
+  }, 2800);
 }
 
 function alertHTML(){
@@ -739,13 +744,20 @@ function renderQR(c){
     </div>
   </div>`;
 
-  setTimeout(()=>{
-    if(typeof QRCode !== 'undefined'){
-      QRCode.toCanvas(document.createElement('canvas'), url, {width:200, margin:2, color:{dark:'#1a1a1a',light:'#ffffff'}}, function(err, canvas){
-        if(!err) document.getElementById('qr-render').appendChild(canvas);
-      });
-    }
-  }, 300);
+  const genQR = ()=>{
+    try{
+      if(typeof QRCode !== 'undefined'){
+        QRCode.toCanvas(document.createElement('canvas'), url, {width:200, margin:2, color:{dark:'#1a1a1a',light:'#ffffff'}}, function(err, canvas){
+          if(!err) document.getElementById('qr-render').appendChild(canvas);
+        });
+      }
+    }catch(e){ console.warn('QR gen error', e); }
+  };
+  if('requestIdleCallback' in window){
+    requestIdleCallback(genQR, {timeout:1000});
+  } else {
+    setTimeout(genQR, 300);
+  }
 }
 
 function downloadQR(){
@@ -780,4 +792,15 @@ function printQR(){
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────
-showTab('viagem');
+async function initApp(){
+  try {
+    await DB.load();
+  } catch (error) {
+    console.warn('Falha ao carregar Supabase, usando dados locais.', error);
+    showAlert('Falha ao carregar Supabase. Usando dados locais.','error');
+  } finally {
+    showTab('viagem');
+  }
+}
+
+initApp();
