@@ -69,7 +69,7 @@ function renderViagem(c){
       </div>
       <div class="actions">
         <button class="btn btn-success btn-sm" onclick="openArrival(${t.id})"><i class="ti ti-flag"></i> Registrar chegada</button>
-        <button class="btn btn-secondary btn-sm" onclick="editTrip(${t.id})"><i class="ti ti-edit"></i> Editar</button>
+        
       </div>
     </div>`).join('')}
   </div>` : ''}
