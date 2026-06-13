@@ -342,7 +342,7 @@ function renderRegistros(c){
       ${t.status==='open' ? `<button class="btn btn-success btn-sm" onclick="openArrival(${t.id})"><i class="ti ti-flag"></i> Chegada</button>` : ''}
       ${t.photoStart||t.photoEnd ? `<button class="btn btn-secondary btn-sm" onclick="viewPhotos(${t.id})"><i class="ti ti-photo"></i> Fotos</button>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="editTrip(${t.id})"><i class="ti ti-edit"></i></button>
-      <button class="btn btn-danger btn-sm" onclick="deleteTrip(${t.id})"><i class="ti ti-trash"></i></button>
+      
     </div>
   </div>`).join('')}`;
 }
