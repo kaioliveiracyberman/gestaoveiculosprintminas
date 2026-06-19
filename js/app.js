@@ -17,7 +17,6 @@ function showAlert(msg, type='success'){
   showTab(activeTab);
   setTimeout(()=>{
     alertMsg=null;
-    // remove alert element directly to avoid heavy re-render of the whole tab
     const el = document.querySelector('.alert');
     if(el && el.parentNode) el.parentNode.removeChild(el);
   }, 2800);
@@ -26,6 +25,20 @@ function showAlert(msg, type='success'){
 function alertHTML(){
   if(!alertMsg) return '';
   return `<div class="alert alert-${alertMsg.type}"><i class="ti ti-${alertMsg.type==='success'?'check':'alert-circle'}"></i>${alertMsg.msg}</div>`;
+}
+
+// Trava simples para evitar cliques duplos enquanto salva
+let _saving = false;
+function setBusy(btn, busy, busyLabel){
+  if(!btn) return;
+  if(busy){
+    btn._oldHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = busyLabel || 'Salvando...';
+  } else {
+    btn.disabled = false;
+    if(btn._oldHTML) btn.innerHTML = btn._oldHTML;
+  }
 }
 
 // ─── Photo preview ─────────────────────────────────────────────────────────
@@ -132,13 +145,14 @@ function renderViagem(c){
       <textarea id="v-obs" placeholder="Estado do veículo, observações iniciais..."></textarea>
     </div>
 
-    <button class="btn btn-primary" style="width:100%" onclick="startTrip()">
+    <button class="btn btn-primary" style="width:100%" onclick="startTrip(this)">
       <i class="ti ti-map-pin"></i> Registrar saída
     </button>
   </div>`;
 }
 
-function startTrip(){
+async function startTrip(btn){
+  if(_saving) return;
   const driverId = document.getElementById('v-driver').value;
   if(!driverId){ alert('Selecione o motorista!'); return; }
   const driver = DB.drivers().find(d=>d.id==driverId);
@@ -164,10 +178,28 @@ function startTrip(){
     status:     'open'
   };
 
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
+  // 1) Atualiza cache + localStorage (instantâneo)
   const trips = DB.trips();
   trips.push(trip);
   DB.save('trips', trips);
-  showAlert('Saída registrada com sucesso!');
+
+  // 2) AGUARDA gravar no Supabase antes de avisar "sucesso"
+  let ok = true;
+  if(USE_SUPABASE){
+    ok = await DB.saveOne('trips', trip);
+  }
+
+  _saving = false;
+  setBusy(btn, false);
+
+  if(ok){
+    showAlert('Saída registrada com sucesso!');
+  } else {
+    showAlert('Salvo no aparelho, mas falhou no servidor. Verifique a conexão e tente sincronizar.', 'error');
+  }
 }
 
 // ─── REGISTRAR CHEGADA ─────────────────────────────────────────────────────
@@ -211,14 +243,15 @@ function openArrival(tripId){
       </div>
 
       <div style="display:flex;gap:8px;margin-top:4px">
-        <button class="btn btn-primary" style="flex:1" onclick="closeTrip(${tripId})"><i class="ti ti-check"></i> Confirmar chegada</button>
+        <button class="btn btn-primary" style="flex:1" onclick="closeTrip(${tripId}, this)"><i class="ti ti-check"></i> Confirmar chegada</button>
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
       </div>
     </div>
   </div>`;
 }
 
-function closeTrip(tripId){
+async function closeTrip(tripId, btn){
+  if(_saving) return;
   const trips = DB.trips();
   const trip  = trips.find(t=>t.id===tripId);
   if(!trip) return;
@@ -230,9 +263,18 @@ function closeTrip(tripId){
   trip.photoEnd = photo && photo.style.display!=='none' ? photo.src : null;
   trip.obsEnd   = document.getElementById('arr-obs').value;
   trip.status   = 'closed';
+
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
   DB.save('trips', trips);
+  let ok = true;
+  if(USE_SUPABASE){ ok = await DB.saveOne('trips', trip); }
+
+  _saving = false;
+  setBusy(btn, false);
   closeModal();
-  showAlert('Chegada registrada com sucesso!');
+  showAlert(ok ? 'Chegada registrada com sucesso!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
 }
 
 // ─── EDITAR VIAGEM ─────────────────────────────────────────────────────────
@@ -252,14 +294,15 @@ function editTrip(tripId){
       <div class="field"><label>KM de saída</label><input type="number" id="e-km" value="${trip.kmStart||''}"></div>
       <div class="field"><label>Observação</label><textarea id="e-obs">${trip.obsStart||''}</textarea></div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" style="flex:1" onclick="saveEdit(${tripId})"><i class="ti ti-check"></i> Salvar</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveEdit(${tripId}, this)"><i class="ti ti-check"></i> Salvar</button>
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
       </div>
     </div>
   </div>`;
 }
 
-function saveEdit(tripId){
+async function saveEdit(tripId, btn){
+  if(_saving) return;
   const trips = DB.trips();
   const trip  = trips.find(t=>t.id===tripId);
   const d = document.getElementById('e-date').value;
@@ -269,9 +312,18 @@ function saveEdit(tripId){
   trip.os          = document.getElementById('e-os').value;
   trip.kmStart     = document.getElementById('e-km').value;
   trip.obsStart    = document.getElementById('e-obs').value;
+
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
   DB.save('trips', trips);
+  let ok = true;
+  if(USE_SUPABASE){ ok = await DB.saveOne('trips', trip); }
+
+  _saving = false;
+  setBusy(btn, false);
   closeModal();
-  showAlert('Viagem atualizada!');
+  showAlert(ok ? 'Viagem atualizada!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
 }
 
 // ─── REGISTROS ─────────────────────────────────────────────────────────────
@@ -347,10 +399,11 @@ function renderRegistros(c){
   </div>`).join('')}`;
 }
 
-function deleteTrip(id){
+async function deleteTrip(id){
   if(!confirm('Excluir este registro permanentemente?')) return;
   const trips = DB.trips().filter(t=>t.id!==id);
   DB.save('trips', trips);
+  if(USE_SUPABASE){ await DB.removeOne('trips', id); }
   renderRegistros(document.getElementById('main-content'));
 }
 
@@ -411,19 +464,30 @@ function openAddDriver(){
         <div class="field"><label>Telefone</label><input type="tel" id="nd-phone" placeholder="(31) 9 xxxxxx"></div>
       </div>
       <div class="field"><label>E-mail</label><input type="email" id="nd-email" placeholder="email@exemplo.com"></div>
-      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addDriver()"><i class="ti ti-plus"></i> Cadastrar</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addDriver(this)"><i class="ti ti-plus"></i> Cadastrar</button>
     </div>
   </div>`;
 }
 
-function addDriver(){
+async function addDriver(btn){
+  if(_saving) return;
   const name = document.getElementById('nd-name').value.trim();
   if(!name){ alert('Informe o nome do motorista!'); return; }
+  const driver = { id:genId(), name, cnh:document.getElementById('nd-cnh').value, phone:document.getElementById('nd-phone').value, email:document.getElementById('nd-email').value, status:'ativo' };
   const drivers = DB.drivers();
-  drivers.push({ id:genId(), name, cnh:document.getElementById('nd-cnh').value, phone:document.getElementById('nd-phone').value, email:document.getElementById('nd-email').value, status:'ativo' });
+  drivers.push(driver);
+
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
   DB.save('drivers', drivers);
+  let ok = true;
+  if(USE_SUPABASE){ ok = await DB.saveOne('drivers', driver); }
+
+  _saving = false;
+  setBusy(btn, false);
   closeModal();
-  showAlert('Motorista cadastrado!');
+  showAlert(ok ? 'Motorista cadastrado!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
 }
 
 function editDriver(id){
@@ -439,28 +503,39 @@ function editDriver(id){
         <div class="field"><label>Telefone</label><input type="tel" id="ed-phone" value="${d.phone||''}"></div>
       </div>
       <div class="field"><label>E-mail</label><input type="email" id="ed-email" value="${d.email||''}"></div>
-      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveDriver(${id})"><i class="ti ti-check"></i> Salvar</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveDriver(${id}, this)"><i class="ti ti-check"></i> Salvar</button>
     </div>
   </div>`;
 }
 
-function saveDriver(id){
+async function saveDriver(id, btn){
+  if(_saving) return;
   const drivers = DB.drivers();
   const d = drivers.find(x=>x.id===id);
   d.name  = document.getElementById('ed-name').value;
   d.cnh   = document.getElementById('ed-cnh').value;
   d.phone = document.getElementById('ed-phone').value;
   d.email = document.getElementById('ed-email').value;
+
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
   DB.save('drivers', drivers);
+  let ok = true;
+  if(USE_SUPABASE){ ok = await DB.saveOne('drivers', d); }
+
+  _saving = false;
+  setBusy(btn, false);
   closeModal();
-  showAlert('Dados atualizados!');
+  showAlert(ok ? 'Dados atualizados!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
 }
 
-function toggleDriver(id){
+async function toggleDriver(id){
   const drivers = DB.drivers();
   const d = drivers.find(x=>x.id===id);
   d.status = d.status==='ativo' ? 'inativo' : 'ativo';
   DB.save('drivers', drivers);
+  if(USE_SUPABASE){ await DB.saveOne('drivers', d); }
   renderMotoristas(document.getElementById('main-content'));
 }
 
@@ -517,18 +592,18 @@ function openAddIncident(){
         <div class="field"><label>Valor (R$)</label><input type="number" id="inc-value" placeholder="0,00" step="0.01"></div>
       </div>
       <div class="field"><label>Descrição *</label><textarea id="inc-desc" placeholder="Descreva a ocorrência em detalhes..."></textarea></div>
-      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addIncident()"><i class="ti ti-plus"></i> Registrar ocorrência</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addIncident(this)"><i class="ti ti-plus"></i> Registrar ocorrência</button>
     </div>
   </div>`;
 }
 
-function addIncident(){
+async function addIncident(btn){
+  if(_saving) return;
   const dId  = document.getElementById('inc-driver').value;
   const desc = document.getElementById('inc-desc').value.trim();
   if(!desc){ alert('Descreva a ocorrência!'); return; }
   const driver  = DB.drivers().find(d=>d.id==dId);
-  const incidents = DB.incidents();
-  incidents.push({
+  const incident = {
     id:          genId(),
     type:        document.getElementById('inc-type').value,
     date:        document.getElementById('inc-date').value,
@@ -538,15 +613,27 @@ function addIncident(){
     os:          document.getElementById('inc-os').value,
     value:       document.getElementById('inc-value').value,
     description: desc
-  });
+  };
+  const incidents = DB.incidents();
+  incidents.push(incident);
+
+  _saving = true;
+  setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
+
   DB.save('incidents', incidents);
+  let ok = true;
+  if(USE_SUPABASE){ ok = await DB.saveOne('incidents', incident); }
+
+  _saving = false;
+  setBusy(btn, false);
   closeModal();
-  showAlert('Ocorrência registrada!');
+  showAlert(ok ? 'Ocorrência registrada!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
 }
 
-function deleteIncident(id){
+async function deleteIncident(id){
   if(!confirm('Excluir esta ocorrência?')) return;
   DB.save('incidents', DB.incidents().filter(i=>i.id!==id));
+  if(USE_SUPABASE){ await DB.removeOne('incidents', id); }
   renderOcorrencias(document.getElementById('main-content'));
 }
 
