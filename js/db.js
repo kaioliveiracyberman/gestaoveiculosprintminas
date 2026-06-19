@@ -14,7 +14,9 @@ const LOCAL_KEYS = {
   drivers: 'pm_drivers',
   incidents: 'pm_incidents'
 };
- 
+
+const TABLE_OF = { trips: 'trips', drivers: 'drivers', incidents: 'incidents' };
+
 const DEFAULT_DRIVERS = [
   {id:1, name:'Ricardo José Pedrosa', cnh:'ABC1234', phone:'31900001111', email:'', status:'ativo'},
   {id:2, name:'Zoldan Rasek da Silva Dias', cnh:'DEF5678', phone:'31900002222', email:'', status:'ativo'},
@@ -38,18 +40,6 @@ async function fetchTable(table){
   if(error) throw error;
   // map snake_case from DB to camelCase used in app
   return (data || []).map(rec => toCamel(rec));
-}
-async function replaceTable(table, items){
-  // deprecated - kept for compatibility
-  if(!USE_SUPABASE) return;
-  try{
-    await supabaseClient.from(table).delete().neq('id', 0);
-    if(items.length){
-      await supabaseClient.from(table).insert(items.map(toSnake));
-    }
-  } catch(e){
-    console.warn(`Supabase replace failed for ${table}:`, e);
-  }
 }
 
 function toCamel(obj){
@@ -109,37 +99,44 @@ function setCache(key, data){
   if(key === 'incidents') cacheIncidents = data;
 }
 
-async function saveTable(key, table, data){
-  setCache(key, data);
-  saveLocal(key, data);
-  if(!USE_SUPABASE) return;
-  try{ console.info(`DB: attempt remote save for table=${table} items=${(data||[]).length}`); }catch(e){}
+// ─── Salvar UM registro (insert/update) ──────────────────────────────────────
+// Esta é a função-chave: grava apenas o item alterado, com upsert.
+// Retorna true se gravou no Supabase, false caso contrário.
+async function upsertOne(key, item){
+  const table = TABLE_OF[key];
+  if(!USE_SUPABASE) return false;
   try{
-    // Fetch remote ids
-    const { data: remote, error: rerr } = await supabaseClient.from(table).select('id');
-    if(rerr) throw rerr;
-    const remoteIds = (remote||[]).map(r=>r.id);
-    const localIds = (data||[]).map(d=>d.id);
-    const toDelete = remoteIds.filter(id => !localIds.includes(id));
-    if(toDelete.length){
-      const { error: derr } = await supabaseClient.from(table).delete().in('id', toDelete);
-      if(derr){ console.warn(`Supabase delete failed for ${table}:`, derr); window.__LAST_SUPABASE_ERROR__ = derr; }
+    const snake = toSnake(item);
+    const { error } = await supabaseClient.from(table).upsert(snake, { onConflict: 'id' });
+    if(error){
+      console.warn(`Supabase upsert failed for ${table}:`, error);
+      window.__LAST_SUPABASE_ERROR__ = error;
+      return false;
     }
-    // Upsert local data (convert to snake_case)
-    const snakeItems = (data||[]).map(d=>toSnake(d));
-    // chunk upserts in case of large lists
-    const chunkSize = 200;
-    for(let i=0;i<snakeItems.length;i+=chunkSize){
-      const chunk = snakeItems.slice(i,i+chunkSize);
-      const { error: uerr } = await supabaseClient.from(table).upsert(chunk, { onConflict: ['id'] });
-      if(uerr){
-        console.warn(`Supabase upsert failed for ${table}:`, uerr, 'chunk=', chunk);
-        window.__LAST_SUPABASE_ERROR__ = uerr;
-      }
-    }
+    console.info(`DB: upserted 1 row into ${table} (id=${item.id})`);
+    return true;
   } catch(e){
-    console.warn(`Supabase saveTable error for ${table}:`, e);
+    console.warn(`Supabase upsertOne error for ${table}:`, e);
     try{ window.__LAST_SUPABASE_ERROR__ = e; }catch(_){ }
+    return false;
+  }
+}
+
+// ─── Deletar UM registro ──────────────────────────────────────────────────────
+async function deleteOne(key, id){
+  const table = TABLE_OF[key];
+  if(!USE_SUPABASE) return false;
+  try{
+    const { error } = await supabaseClient.from(table).delete().eq('id', id);
+    if(error){
+      console.warn(`Supabase delete failed for ${table}:`, error);
+      window.__LAST_SUPABASE_ERROR__ = error;
+      return false;
+    }
+    return true;
+  } catch(e){
+    console.warn(`Supabase deleteOne error for ${table}:`, e);
+    return false;
   }
 }
 
@@ -147,11 +144,24 @@ const DB = {
   trips: () => cacheTrips,
   drivers: () => cacheDrivers,
   incidents: () => cacheIncidents,
-  async save(key, data){
-    if(key === 'trips') await saveTable(key, 'trips', data);
-    if(key === 'drivers') await saveTable(key, 'drivers', data);
-    if(key === 'incidents') await saveTable(key, 'incidents', data);
+
+  // Salva a lista inteira no cache + localStorage (instantâneo),
+  // mas NÃO regrava a tabela remota inteira. Para o remoto use saveOne/removeOne.
+  save(key, data){
+    setCache(key, data);
+    saveLocal(key, data);
   },
+
+  // Grava UM registro no remoto e aguarda concluir.
+  async saveOne(key, item){
+    return await upsertOne(key, item);
+  },
+
+  // Remove UM registro do remoto e aguarda concluir.
+  async removeOne(key, id){
+    return await deleteOne(key, id);
+  },
+
   async load(){
     let drivers = await loadTable('drivers', 'drivers');
     let seededDrivers = false;
@@ -169,78 +179,21 @@ const DB = {
     saveLocal('incidents', cacheIncidents);
 
     if(USE_SUPABASE && seededDrivers){
-      // ensure drivers seed exists remotely
-      await saveTable('drivers','drivers', cacheDrivers);
+      // semeia os motoristas padrão remotamente, um a um
+      for(const d of cacheDrivers){ await upsertOne('drivers', d); }
     }
   }
 };
 
-// ─── Remote Sync Helpers ───────────────────────────────────────────────────
-DB.fetchDriversRemote = async function(){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const rows = await fetchTable('drivers');
-  cacheDrivers = rows || [];
-  saveLocal('drivers', cacheDrivers);
-  console.info('DB: fetched drivers remote=', cacheDrivers.length);
-  return cacheDrivers;
-};
-
-DB.fetchTripsRemote = async function(){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const rows = await fetchTable('trips');
-  cacheTrips = rows || [];
-  saveLocal('trips', cacheTrips);
-  console.info('DB: fetched trips remote=', cacheTrips.length);
-  return cacheTrips;
-};
-
-DB.fetchIncidentsRemote = async function(){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const rows = await fetchTable('incidents');
-  cacheIncidents = rows || [];
-  saveLocal('incidents', cacheIncidents);
-  console.info('DB: fetched incidents remote=', cacheIncidents.length);
-  return cacheIncidents;
-};
-
-DB.saveDriversRemote = async function(data){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const toSave = data || cacheDrivers;
-  await saveTable('drivers','drivers', toSave);
-  console.info('DB: saved drivers remote=', (toSave||[]).length);
-};
-
-DB.saveTripsRemote = async function(data){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const toSave = data || cacheTrips;
-  await saveTable('trips','trips', toSave);
-  console.info('DB: saved trips remote=', (toSave||[]).length);
-};
-
-DB.saveIncidentsRemote = async function(data){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  const toSave = data || cacheIncidents;
-  await saveTable('incidents','incidents', toSave);
-  console.info('DB: saved incidents remote=', (toSave||[]).length);
-};
-
-DB.syncAllToRemote = async function(){
-  if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  await Promise.all([
-    saveTable('drivers','drivers', cacheDrivers),
-    saveTable('trips','trips', cacheTrips),
-    saveTable('incidents','incidents', cacheIncidents)
-  ]);
-  console.info('DB: syncAllToRemote completed');
-};
-
+// ─── Sincronização remota (opcional) ─────────────────────────────────────────
 DB.syncFromRemote = async function(){
   if(!USE_SUPABASE) throw new Error('Supabase not configured');
-  await Promise.all([
-    DB.fetchDriversRemote(),
-    DB.fetchTripsRemote(),
-    DB.fetchIncidentsRemote()
-  ]);
+  cacheDrivers = (await fetchTable('drivers')) || [];
+  cacheTrips = (await fetchTable('trips')) || [];
+  cacheIncidents = (await fetchTable('incidents')) || [];
+  saveLocal('drivers', cacheDrivers);
+  saveLocal('trips', cacheTrips);
+  saveLocal('incidents', cacheIncidents);
   console.info('DB: syncFromRemote completed');
 };
 
