@@ -554,7 +554,7 @@ function renderOcorrencias(c){
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
       <div>
         <div style="font-weight:600;font-size:14px;color:${inc.type==='outro'?'#CC5500':'#791F1F'}">
-          ${inc.type==='multa'?'🚦 Multa':inc.type==='acidente'?'🚗 Acidente':'📋 Ocorrência'} — ${inc.driverName}
+          ${inc.type==='multa'?'Multa':inc.type==='acidente'?'Acidente':'Ocorrência'} — ${inc.driverName}
         </div>
         <div style="font-size:12px;color:#666;margin-top:2px">${fmtDate(inc.date)} • ${inc.vehicle} • OS: ${inc.os||'-'}</div>
         <div style="font-size:13px;margin-top:6px">${inc.description}</div>
