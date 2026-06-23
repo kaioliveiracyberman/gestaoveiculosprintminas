@@ -28,11 +28,25 @@ let cacheDrivers = [];
 let cacheIncidents = [];
 
 function saveLocal(key, data){
-  localStorage.setItem(LOCAL_KEYS[key], JSON.stringify(data));
+  try{
+    localStorage.setItem(LOCAL_KEYS[key], JSON.stringify(data));
+  } catch(e){
+    // CORREÇÃO: localStorage pode estourar a cota (ex: muitas fotos
+    // acumuladas em base64). Antes, isso lançava um erro não tratado
+    // que podia interromper o fluxo de salvamento no meio. Agora só
+    // avisamos no console e seguimos — o dado mais importante (Supabase)
+    // continua sendo tentado normalmente pelas funções que chamam save().
+    console.warn(`Falha ao salvar "${key}" no localStorage (provavelmente cota excedida):`, e);
+  }
 }
 
 function loadLocal(key){
-  return JSON.parse(localStorage.getItem(LOCAL_KEYS[key]) || '[]');
+  try{
+    return JSON.parse(localStorage.getItem(LOCAL_KEYS[key]) || '[]');
+  } catch(e){
+    console.warn(`Falha ao ler "${key}" do localStorage:`, e);
+    return [];
+  }
 }
 
 async function fetchTable(table){
@@ -99,6 +113,21 @@ function setCache(key, data){
   if(key === 'incidents') cacheIncidents = data;
 }
 
+// ─── CORREÇÃO: timeout para nunca ficar travado esperando o servidor ───────
+// Antes, se a rede caísse ou demorasse demais (comum no celular, com fotos
+// grandes), o await no upsert/delete nunca resolvia nem rejeitava, e o
+// botão "Salvando..." ficava pendurado para sempre. Agora, depois de
+// UPSERT_TIMEOUT_MS, a função desiste e retorna false/erro.
+const UPSERT_TIMEOUT_MS = 20000;
+
+function withTimeout(promise, ms){
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`Tempo limite de ${ms}ms excedido ao falar com o servidor`)), ms);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 // ─── Salvar UM registro (insert/update) ──────────────────────────────────────
 // Esta é a função-chave: grava apenas o item alterado, com upsert.
 // Retorna true se gravou no Supabase, false caso contrário.
@@ -107,7 +136,10 @@ async function upsertOne(key, item){
   if(!USE_SUPABASE) return false;
   try{
     const snake = toSnake(item);
-    const { error } = await supabaseClient.from(table).upsert(snake, { onConflict: 'id' });
+    const { error } = await withTimeout(
+      supabaseClient.from(table).upsert(snake, { onConflict: 'id' }),
+      UPSERT_TIMEOUT_MS
+    );
     if(error){
       console.warn(`Supabase upsert failed for ${table}:`, error);
       window.__LAST_SUPABASE_ERROR__ = error;
@@ -127,7 +159,10 @@ async function deleteOne(key, id){
   const table = TABLE_OF[key];
   if(!USE_SUPABASE) return false;
   try{
-    const { error } = await supabaseClient.from(table).delete().eq('id', id);
+    const { error } = await withTimeout(
+      supabaseClient.from(table).delete().eq('id', id),
+      UPSERT_TIMEOUT_MS
+    );
     if(error){
       console.warn(`Supabase delete failed for ${table}:`, error);
       window.__LAST_SUPABASE_ERROR__ = error;
@@ -198,7 +233,16 @@ DB.syncFromRemote = async function(){
 };
 
 // ─── Utility Functions ─────────────────────────────────────────────────────
-function genId(){ return Date.now() + Math.floor(Math.random()*1000); }
+// CORREÇÃO: genId() original era Date.now() + random(0-999), que podia
+// colidir se dois registros fossem criados no mesmo milissegundo (ex:
+// clique duplo, ou duas abas). Como o upsert usa onConflict:'id', uma
+// colisão faria um registro sobrescrever o outro silenciosamente.
+// Agora um contador monotônico garante unicidade dentro da sessão.
+let _idCounter = 0;
+function genId(){
+  _idCounter++;
+  return Date.now() * 1000 + (_idCounter % 1000);
+}
 function fmt(dt){ if(!dt) return '-'; const d=new Date(dt); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
 function fmtDate(dt){ if(!dt) return '-'; return new Date(dt).toLocaleDateString('pt-BR'); }
 function fmtTime(dt){ if(!dt) return '-'; return new Date(dt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
