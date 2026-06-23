@@ -71,9 +71,6 @@ function previewPhoto(input, previewId){
   };
   r.readAsDataURL(file);
 }
-
-function closeModal(){ document.getElementById('modal-container').innerHTML = ''; }
-
 // ─── NOVA VIAGEM ───────────────────────────────────────────────────────────
 function renderViagem(c){
   const drivers  = DB.drivers().filter(d=>d.status==='ativo');
