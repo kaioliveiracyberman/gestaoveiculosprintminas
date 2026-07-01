@@ -1,17 +1,74 @@
 // ─── Logo embutida (base64) ─────────────────────────────────────────────────
+// IMPORTANTE: substitua a string abaixo pela sua logo real em base64.
+// Enquanto estiver como "PLACEHOLDER_LOGO_BASE64", o addImage do jsPDF
+// falharia — por isso agora a inserção da logo é protegida (ver hasValidLogo).
 const LOGO_BASE64 = "data:image/png;base64,PLACEHOLDER_LOGO_BASE64";
 
+// Detecta se a logo é um base64 realmente utilizável. Se ainda estiver
+// como placeholder (ou vazia), o PDF é gerado normalmente, apenas SEM a logo,
+// em vez de quebrar todo o relatório.
+function hasValidLogo(){
+  return typeof LOGO_BASE64 === 'string'
+      && LOGO_BASE64.startsWith('data:image')
+      && !LOGO_BASE64.includes('PLACEHOLDER');
+}
+
+// Insere a logo de forma segura: qualquer erro é apenas avisado no console
+// e o PDF continua sendo gerado sem a imagem.
+function safeAddLogo(doc, x, y, w, h){
+  if(!hasValidLogo()) return;
+  try{
+    doc.addImage(LOGO_BASE64, 'PNG', x, y, w, h);
+  }catch(err){
+    console.warn('Não foi possível inserir a logo no PDF, seguindo sem ela.', err);
+  }
+}
+
 // ─── Loader do jsPDF (carregado uma única vez, sob demanda) ────────────────
+// CORREÇÃO: agora há uma lista de CDNs de fallback. Se o primeiro CDN estiver
+// bloqueado (adblock/firewall) ou fora do ar, tenta o próximo automaticamente
+// antes de desistir. Isso reduz muito o erro genérico de "não foi possível
+// gerar o PDF".
+const JSPDF_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js',
+  'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'
+];
+
 let _jsPDFLoading = null;
+
+function _loadScriptFromSources(sources, index = 0){
+  return new Promise((resolve, reject) => {
+    if(index >= sources.length){
+      reject(new Error('Falha ao carregar jsPDF de todos os CDNs disponíveis.'));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = sources[index];
+    script.onload = () => {
+      if(window.jspdf && window.jspdf.jsPDF){
+        resolve(window.jspdf.jsPDF);
+      } else {
+        // Script carregou mas não expôs a lib — tenta o próximo CDN.
+        _loadScriptFromSources(sources, index + 1).then(resolve, reject);
+      }
+    };
+    script.onerror = () => {
+      console.warn('Falha ao carregar jsPDF de:', sources[index], '— tentando próximo CDN.');
+      _loadScriptFromSources(sources, index + 1).then(resolve, reject);
+    };
+    document.head.appendChild(script);
+  });
+}
+
 function loadJsPDF(){
   if(window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
   if(_jsPDFLoading) return _jsPDFLoading;
-  _jsPDFLoading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-    script.onload = () => resolve(window.jspdf.jsPDF);
-    script.onerror = () => reject(new Error('Falha ao carregar jsPDF'));
-    document.head.appendChild(script);
+  _jsPDFLoading = _loadScriptFromSources(JSPDF_SOURCES).catch(err => {
+    // Zera o cache da promise para permitir nova tentativa numa próxima
+    // chamada (ex.: usuário reconecta à internet e tenta de novo).
+    _jsPDFLoading = null;
+    throw err;
   });
   return _jsPDFLoading;
 }
@@ -761,10 +818,10 @@ async function printIncident(id){
     const W = doc.internal.pageSize.getWidth();
     let y = 0;
 
-    // Cabeçalho com logo
+    // Cabeçalho com logo (logo inserida de forma segura)
     doc.setFillColor(255,107,0);
     doc.rect(0, 0, W, 32, 'F');
-    doc.addImage(LOGO_BASE64, 'PNG', 12, 5, 22, 22);
+    safeAddLogo(doc, 12, 5, 22, 22);
     doc.setTextColor(255,255,255);
     doc.setFont('helvetica','bold');
     doc.setFontSize(16);
@@ -839,7 +896,8 @@ async function printIncident(id){
     doc.save(fileName);
   } catch(e){
     console.error('Erro ao gerar PDF', e);
-    alert('Não foi possível gerar o PDF. Verifique a conexão e tente novamente.');
+    alert('Não foi possível gerar o PDF.\n\nDetalhe: ' + (e && e.message ? e.message : e) +
+          '\n\nSe o problema persistir, verifique se algum bloqueador de anúncios ou firewall está impedindo o carregamento do gerador de PDF.');
   } finally {
     setBusy(btn, false);
   }
@@ -960,7 +1018,7 @@ async function printDriver(driverId){
     function drawHeader(){
       doc.setFillColor(255,107,0);
       doc.rect(0, 0, W, 32, 'F');
-      doc.addImage(LOGO_BASE64, 'PNG', margin-2, 5, 22, 22);
+      safeAddLogo(doc, margin-2, 5, 22, 22);
       doc.setTextColor(255,255,255);
       doc.setFont('helvetica','bold');
       doc.setFontSize(16);
@@ -1123,7 +1181,8 @@ async function printDriver(driverId){
     doc.save(fileName);
   } catch(e){
     console.error('Erro ao gerar PDF', e);
-    alert('Não foi possível gerar o PDF. Verifique a conexão e tente novamente.');
+    alert('Não foi possível gerar o PDF.\n\nDetalhe: ' + (e && e.message ? e.message : e) +
+          '\n\nSe o problema persistir, verifique se algum bloqueador de anúncios ou firewall está impedindo o carregamento do gerador de PDF.');
   } finally {
     setBusy(btn, false);
   }
