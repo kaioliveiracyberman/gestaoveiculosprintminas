@@ -26,6 +26,51 @@ function loadJsPDF(){
 const TAB_ORDER=['visao','viagem','registros','motoristas','ocorrencias','relatorio','qr'];
 let activeTab='visao',alertMsg=null;
 
+// Todo texto informado pelo usuário passa por esta função antes de entrar no HTML.
+// Isso evita que nomes, observações e descrições sejam interpretados como código.
+function escapeHTML(value){
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+}
+function vehicleLabel(vehicle){ return escapeHTML(vehicle || 'Veículo não informado'); }
+function openVehicleTrip(vehicle){ return DB.trips().find(trip => trip.vehicle === vehicle && !trip.endTime); }
+function vehicleBlock(vehicle){ return DB.incidents().find(incident => incident.vehicle === vehicle && incident.blocksVehicle && incident.status !== 'resolved'); }
+function lastVehicleKm(vehicle){
+  const lastTrip=DB.trips().filter(trip=>trip.vehicle===vehicle).sort((a,b)=>new Date(b.endTime||b.startTime)-new Date(a.endTime||a.startTime))[0];
+  if(!lastTrip)return null;
+  return lastTrip.kmEnd || lastTrip.kmStart || null;
+}
+function vehicleAvailabilityMessage(vehicle){
+  const trip=openVehicleTrip(vehicle);
+  if(trip) return `${vehicle} já está em uso por ${trip.driverName}. Registre a chegada antes de abrir outra viagem.`;
+  const incident=vehicleBlock(vehicle);
+  if(incident) return `${vehicle} está bloqueado pelo chamado aberto de ${fmtDate(incident.date)}. Resolva o chamado antes de liberar o veículo.`;
+  return '';
+}
+function normalizePlate(value){ return String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function normalizeRenavam(value){ return String(value||'').replace(/\D/g,''); }
+function validPlate(value){ return /^(?:[A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})$/.test(normalizePlate(value)); }
+function validRenavam(value){ const renavam=normalizeRenavam(value);return renavam.length>=9&&renavam.length<=11; }
+function fineQueryValues(){ return {plate:normalizePlate(document.getElementById('fine-plate')?.value),renavam:normalizeRenavam(document.getElementById('fine-renavam')?.value)}; }
+function validateFineQuery(){
+  const {plate,renavam}=fineQueryValues();
+  if(!validPlate(plate)){showAlert('Informe uma placa válida, por exemplo ABC1D23.','error');return null;}
+  if(!validRenavam(renavam)){showAlert('Informe um RENAVAM com 9 a 11 dígitos.','error');return null;}
+  return {plate,renavam};
+}
+function consultOfficialFines(){
+  const values=validateFineQuery();if(!values)return;
+  window.open('https://www.gov.br/pt-br/servicos/consultar-multas-aplicadas-pelo-departamento-nacional-de-infraestrutura-de-transportes','_blank','noopener,noreferrer');
+  showAlert('Portal oficial aberto. Informe a placa e o RENAVAM para concluir a consulta.');
+}
+function openManualFine(){
+  const values=validateFineQuery();if(!values)return;
+  openAddIncident();
+  document.getElementById('inc-type').value='multa';
+  const row=document.getElementById('inc-os').closest('.row');
+  row.insertAdjacentHTML('afterend','<div class="row"><div class="field"><label>Placa</label><input type="text" id="inc-plate" maxlength="7" value="'+escapeHTML(values.plate)+'"></div><div class="field"><label>RENAVAM</label><input type="text" id="inc-renavam" inputmode="numeric" maxlength="11" value="'+escapeHTML(values.renavam)+'"></div></div>');
+  document.getElementById('inc-desc').focus();
+}
+
 function showTab(tab){
   activeTab=tab;
   document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',TAB_ORDER[i]===tab));
@@ -40,7 +85,7 @@ function showAlert(msg,type='success'){
 }
 function alertHTML(){
   if(!alertMsg)return '';
-  return '<div class="alert alert-'+alertMsg.type+'"><i class="ti ti-'+(alertMsg.type==='success'?'check':'alert-circle')+'"></i>'+alertMsg.msg+'</div>';
+  return '<div class="alert alert-'+alertMsg.type+'"><i class="ti ti-'+(alertMsg.type==='success'?'check':'alert-circle')+'"></i>'+escapeHTML(alertMsg.msg)+'</div>';
 }
 
 let _saving=false;
@@ -61,19 +106,20 @@ function renderVisaoGeral(c){
   const monthTrips=trips.filter(t=>t.startTime&&t.startTime.startsWith(currentMonth));
   const monthKm=calcKm(monthTrips);
   const monthIncidents=incidents.filter(i=>i.date&&i.date.startsWith(currentMonth)).length;
+  const openBlocks=incidents.filter(i=>i.blocksVehicle&&i.status!=='resolved').length;
 
   const tripEvents=trips.map(t=>({
     kind:t.endTime?'trip-closed':'trip-open',
     date:t.endTime||t.startTime,
-    title:t.vehicle+' \u00b7 '+(t.endTime?'retorno registrado':'sa\u00edda registrada'),
-    meta:t.driverName+' \u00b7 '+fmtDate(t.startTime)+(t.destination?' \u00b7 '+t.destination:''),
+    title:vehicleLabel(t.vehicle)+' \u00b7 '+(t.endTime?'retorno registrado':'sa\u00edda registrada'),
+    meta:escapeHTML(t.driverName)+' \u00b7 '+fmtDate(t.startTime)+(t.destination?' \u00b7 '+escapeHTML(t.destination):''),
     badge:t.endTime?'Conclu\u00edda':'Em aberto'
   }));
   const incidentEvents=incidents.map(i=>({
     kind:'incident',date:i.date,
-    title:i.vehicle+' \u00b7 ocorr\u00eancia registrada',
-    meta:i.driverName+' \u00b7 '+fmtDate(i.date),
-    badge:i.type==='multa'?'Multa':i.type==='acidente'?'Acidente':'Ocorr\u00eancia'
+    title:vehicleLabel(i.vehicle)+' \u00b7 ocorr\u00eancia registrada',
+    meta:escapeHTML(i.driverName)+' \u00b7 '+fmtDate(i.date),
+    badge:i.type==='multa'?'Multa':i.type==='acidente'?'Acidente':i.type==='chamado'?'Chamado':'Ocorr\u00eancia'
   }));
   const feed=[...tripEvents,...incidentEvents].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
 
@@ -91,11 +137,12 @@ function renderVisaoGeral(c){
   c.innerHTML=alertHTML()+
     '<p class="overview-title">Vis\u00e3o geral</p>'+
     '<div class="stat-grid-ov">'+
-      '<div class="stat-card-ov"><div class="stat-icon ic-blue"><i class="ti ti-users"></i></div><p class="stat-num-ov">'+activeDrivers+'</p><p class="stat-label-ov">Motoristas ativos</p></div>'+
-      '<div class="stat-card-ov"><div class="stat-icon ic-amber"><i class="ti ti-clock"></i></div><p class="stat-num-ov">'+openTrips+'</p><p class="stat-label-ov">Viagens em aberto</p></div>'+
-      '<div class="stat-card-ov"><div class="stat-icon ic-green"><i class="ti ti-route"></i></div><p class="stat-num-ov">'+tripsToday+'</p><p class="stat-label-ov">Viagens hoje</p></div>'+
-      '<div class="stat-card-ov"><div class="stat-icon ic-blue"><i class="ti ti-gauge"></i></div><p class="stat-num-ov">'+monthKm+'</p><p class="stat-label-ov">Km rodados no m\u00eas</p></div>'+
-      '<div class="stat-card-ov"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">'+monthIncidents+'</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></div>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'motoristas\')" title="Ver motoristas"><div class="stat-icon ic-blue"><i class="ti ti-users"></i></div><p class="stat-num-ov">'+activeDrivers+'</p><p class="stat-label-ov">Motoristas ativos</p></button>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'viagem\')" title="Ver viagens em aberto"><div class="stat-icon ic-amber"><i class="ti ti-clock"></i></div><p class="stat-num-ov">'+openTrips+'</p><p class="stat-label-ov">Viagens em aberto</p></button>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'registros\')" title="Ver registros"><div class="stat-icon ic-green"><i class="ti ti-route"></i></div><p class="stat-num-ov">'+tripsToday+'</p><p class="stat-label-ov">Viagens hoje</p></button>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'registros\')" title="Ver quilometragem"><div class="stat-icon ic-blue"><i class="ti ti-gauge"></i></div><p class="stat-num-ov">'+monthKm+'</p><p class="stat-label-ov">Km rodados no m\u00eas</p></button>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">'+monthIncidents+'</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>'+
+      '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">'+openBlocks+'</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>'+
     '</div>'+
     '<div class="activity-card">'+
       '<p class="activity-title">Atividades recentes</p>'+
@@ -134,23 +181,40 @@ function renderViagem(c){
   const openTrips=DB.trips().filter(t=>!t.endTime);
   c.innerHTML=alertHTML()+
     (openTrips.length?'<div class="card"><div class="card-title"><i class="ti ti-clock"></i> Viagem em aberto</div>'+
-      openTrips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+t.driverName+'</div><div class="trip-meta"><span><i class="ti ti-car"></i>'+t.vehicle+'</span><span><i class="ti ti-hash"></i>OS: '+(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+(t.destination||'-')+'</span><span><i class="ti ti-clock"></i>'+fmt(t.startTime)+'</span></div></div><span class="tag tag-open">Em aberto</span></div><div class="actions"><button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Registrar chegada</button></div></div>').join('')+
+      openTrips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+escapeHTML(t.destination||'-')+'</span><span><i class="ti ti-clock"></i>'+fmt(t.startTime)+'</span></div></div><span class="tag tag-open">Em aberto</span></div><div class="actions"><button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Registrar chegada</button></div></div>').join('')+
       '</div>':'')+
     '<div class="card"><div class="card-title"><i class="ti ti-map-pin"></i> Registrar sa\u00edda</div>'+
     '<div class="field"><label>Motorista</label><select id="v-driver"><option value="">Selecione o motorista...</option>'+
-      drivers.map(d=>'<option value="'+d.id+'">'+d.name+'</option>').join('')+
+      drivers.map(d=>'<option value="'+d.id+'">'+escapeHTML(d.name)+'</option>').join('')+
     '</select></div>'+
-    '<div class="row"><div class="field"><label>Ve\u00edculo</label><select id="v-vehicle"><option value="FIORINO">FIORINO</option><option value="STRADA">STRADA</option></select></div>'+
+    '<div class="row"><div class="field"><label>Ve\u00edculo</label><select id="v-vehicle" onchange="updateVehicleAvailability()"><option value="FIORINO">FIORINO</option><option value="STRADA">STRADA</option></select><p id="vehicle-availability" class="vehicle-status"></p></div>'+
     '<div class="field"><label>N\u00ba OS (Printwayy)</label><input type="text" id="v-os" placeholder="Ex: OS-2024-001"></div></div>'+
     '<div class="row"><div class="field"><label>Data de sa\u00edda</label><input type="date" id="v-date" value="'+new Date().toISOString().split('T')[0]+'"></div>'+
     '<div class="field"><label>Hor\u00e1rio de sa\u00edda</label><input type="time" id="v-time" value="'+new Date().toTimeString().slice(0,5)+'"></div></div>'+
     '<div class="field"><label>Destino</label><input type="text" id="v-dest" placeholder="Cidade / empresa de destino"></div>'+
-    '<div class="field"><label>KM de sa\u00edda</label><input type="number" id="v-km-start" placeholder="Ex: 45230"></div>'+
+    '<div class="field"><label>KM de sa\u00edda</label><input type="number" id="v-km-start" min="0" placeholder="Ex: 45230"><p id="vehicle-last-km" class="vehicle-status"></p></div>'+
     '<div class="field"><label>Foto do painel (KM de sa\u00edda)</label>'+
     '<div class="photo-area" onclick="document.getElementById(\'v-photo-start\').click()"><i class="ti ti-camera" style="font-size:26px;display:block;margin-bottom:6px"></i>Toque para tirar foto do painel<input type="file" id="v-photo-start" accept="image/*" capture="environment" style="display:none" onchange="previewPhoto(this,\'prev-start\')"></div>'+
     '<img id="prev-start" class="photo-preview" style="display:none"></div>'+
     '<div class="field"><label>Observa\u00e7\u00f5es</label><textarea id="v-obs" placeholder="Estado do ve\u00edculo, observa\u00e7\u00f5es iniciais..."></textarea></div>'+
-    '<button class="btn btn-primary" style="width:100%" onclick="startTrip(this)"><i class="ti ti-map-pin"></i> Registrar sa\u00edda</button></div>';
+    '<button class="btn btn-primary" id="start-trip-button" style="width:100%" onclick="startTrip(this)"><i class="ti ti-map-pin"></i> Registrar sa\u00edda</button></div>';
+  updateVehicleAvailability();
+}
+
+function updateVehicleAvailability(){
+  const vehicle=document.getElementById('v-vehicle')?.value;
+  const status=document.getElementById('vehicle-availability');
+  const button=document.getElementById('start-trip-button');
+  if(!vehicle||!status||!button)return;
+  const message=vehicleAvailabilityMessage(vehicle);
+  status.textContent=message || vehicle+' disponível para uma nova viagem.';
+  status.className='vehicle-status '+(message?'vehicle-status-blocked':'vehicle-status-ok');
+  button.disabled=Boolean(message);
+  const kmInput=document.getElementById('v-km-start');
+  const kmHint=document.getElementById('vehicle-last-km');
+  const lastKm=lastVehicleKm(vehicle);
+  if(kmInput){kmInput.value=lastKm||'';}
+  if(kmHint){kmHint.textContent=lastKm?'Último KM registrado para '+vehicle+': '+lastKm+'. Você pode corrigir se necessário.':'Ainda não há KM registrado para '+vehicle+'.';kmHint.className='vehicle-status vehicle-status-ok';}
 }
 
 async function startTrip(btn){
@@ -158,9 +222,12 @@ async function startTrip(btn){
   const driverId=document.getElementById('v-driver').value;
   if(!driverId){alert('Selecione o motorista!');return;}
   const driver=DB.drivers().find(d=>d.id==driverId);
+  const vehicle=document.getElementById('v-vehicle').value;
+  const availability=vehicleAvailabilityMessage(vehicle);
+  if(availability){showAlert(availability,'error');updateVehicleAvailability();return;}
   const date=document.getElementById('v-date').value,time=document.getElementById('v-time').value;
   const photo=document.getElementById('prev-start');
-  const trip={id:genId(),driverId:parseInt(driverId),driverName:driver.name,vehicle:document.getElementById('v-vehicle').value,os:document.getElementById('v-os').value,destination:document.getElementById('v-dest').value,startTime:new Date(date+'T'+time).toISOString(),endTime:null,kmStart:document.getElementById('v-km-start').value,kmEnd:null,photoStart:photo&&photo.style.display!=='none'?photo.src:null,photoEnd:null,obsStart:document.getElementById('v-obs').value,obsEnd:'',status:'open'};
+  const trip={id:genId(),driverId:parseInt(driverId),driverName:driver.name,vehicle,os:document.getElementById('v-os').value.trim(),destination:document.getElementById('v-dest').value.trim(),startTime:new Date(date+'T'+time).toISOString(),endTime:null,kmStart:document.getElementById('v-km-start').value,kmEnd:null,photoStart:photo&&photo.style.display!=='none'?photo.src:null,photoEnd:null,obsStart:document.getElementById('v-obs').value.trim(),obsEnd:'',status:'open'};
   _saving=true;setBusy(btn,true,'<i class="ti ti-loader"></i> Salvando...');
   let ok=true;
   try{const trips=DB.trips();trips.push(trip);DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
@@ -188,22 +255,44 @@ async function closeTrip(tripId,btn){
   closeModal();showAlert(ok?'Chegada registrada com sucesso!':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
 }
 
+function inputDateTime(value){
+  if(!value)return {date:'',time:''};
+  const d=new Date(value),pad=n=>String(n).padStart(2,'0');
+  return {date:d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),time:pad(d.getHours())+':'+pad(d.getMinutes())};
+}
 function editTrip(tripId){
   const trip=DB.trips().find(t=>t.id===tripId);if(!trip)return;
-  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Editar viagem<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="row"><div class="field"><label>Data de sa\u00edda</label><input type="date" id="e-date" value="'+trip.startTime.split('T')[0]+'"></div><div class="field"><label>Hora de sa\u00edda</label><input type="time" id="e-time" value="'+trip.startTime.split('T')[1].slice(0,5)+'"></div></div><div class="field"><label>Destino</label><input type="text" id="e-dest" value="'+(trip.destination||'')+'"></div><div class="field"><label>N\u00ba OS</label><input type="text" id="e-os" value="'+(trip.os||'')+'"></div><div class="field"><label>KM de sa\u00edda</label><input type="number" id="e-km" value="'+(trip.kmStart||'')+'"></div><div class="field"><label>Observa\u00e7\u00e3o</label><textarea id="e-obs">'+(trip.obsStart||'')+'</textarea></div><div style="display:flex;gap:8px"><button class="btn btn-primary" style="flex:1" onclick="saveEdit('+tripId+', this)"><i class="ti ti-check"></i> Salvar</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
+  const start=inputDateTime(trip.startTime),end=inputDateTime(trip.endTime);
+  const driverOptions=DB.drivers().map(driver=>'<option value="'+driver.id+'" '+(driver.id===trip.driverId?'selected':'')+'>'+escapeHTML(driver.name)+'</option>').join('');
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide"><div class="modal-title">Editar registro<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="fine-note">Toda alteração exige um motivo e ficará registrada no histórico.</p><div class="row"><div class="field"><label>Motorista</label><select id="e-driver">'+driverOptions+'</select></div><div class="field"><label>Veículo</label><select id="e-vehicle"><option value="FIORINO" '+(trip.vehicle==='FIORINO'?'selected':'')+'>FIORINO</option><option value="STRADA" '+(trip.vehicle==='STRADA'?'selected':'')+'>STRADA</option></select></div></div><div class="row"><div class="field"><label>Data de saída</label><input type="date" id="e-date" value="'+start.date+'"></div><div class="field"><label>Hora de saída</label><input type="time" id="e-time" value="'+start.time+'"></div></div><div class="row"><div class="field"><label>Data de chegada</label><input type="date" id="e-end-date" value="'+end.date+'"></div><div class="field"><label>Hora de chegada</label><input type="time" id="e-end-time" value="'+end.time+'"></div></div><div class="row"><div class="field"><label>KM de saída</label><input type="number" id="e-km" min="0" value="'+escapeHTML(trip.kmStart||'')+'"></div><div class="field"><label>KM de chegada</label><input type="number" id="e-end-km" min="0" value="'+escapeHTML(trip.kmEnd||'')+'"></div></div><div class="field"><label>Destino</label><input type="text" id="e-dest" value="'+escapeHTML(trip.destination||'')+'"></div><div class="field"><label>Nº OS</label><input type="text" id="e-os" value="'+escapeHTML(trip.os||'')+'"></div><div class="field"><label>Observações de saída</label><textarea id="e-obs">'+escapeHTML(trip.obsStart||'')+'</textarea></div><div class="field"><label>Observações de chegada</label><textarea id="e-end-obs">'+escapeHTML(trip.obsEnd||'')+'</textarea></div><div class="field"><label>Motivo da alteração *</label><textarea id="e-reason" maxlength="500" placeholder="Explique o que foi corrigido e por quê."></textarea></div><div style="display:flex;gap:8px"><button class="btn btn-primary" style="flex:1" onclick="saveEdit('+tripId+', this)"><i class="ti ti-check"></i> Salvar alteração</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
 }
 
+function changedTripFields(before,after){
+  const labels={driverId:'motorista',vehicle:'veículo',startTime:'data/hora de saída',endTime:'data/hora de chegada',kmStart:'KM de saída',kmEnd:'KM de chegada',destination:'destino',os:'número da OS',obsStart:'observações de saída',obsEnd:'observações de chegada'};
+  return Object.keys(labels).filter(key=>String(before[key]??'')!==String(after[key]??'')).map(key=>labels[key]);
+}
 async function saveEdit(tripId,btn){
   if(_saving)return;
-  const trips=DB.trips(),trip=trips.find(t=>t.id===tripId);
-  const d=document.getElementById('e-date').value,t=document.getElementById('e-time').value;
-  trip.startTime=new Date(d+'T'+t).toISOString();trip.destination=document.getElementById('e-dest').value;trip.os=document.getElementById('e-os').value;trip.kmStart=document.getElementById('e-km').value;trip.obsStart=document.getElementById('e-obs').value;
+  const trips=DB.trips(),trip=trips.find(t=>t.id===tripId);if(!trip)return;
+  const reason=document.getElementById('e-reason').value.trim();
+  if(!reason){showAlert('Informe o motivo da alteração antes de salvar.','error');return;}
+  const driver=DB.drivers().find(item=>item.id==document.getElementById('e-driver').value);
+  const startDate=document.getElementById('e-date').value,startTime=document.getElementById('e-time').value,endDate=document.getElementById('e-end-date').value,endTime=document.getElementById('e-end-time').value;
+  if(!driver||!startDate||!startTime){showAlert('Preencha motorista, data e hora de saída.','error');return;}
+  if(Boolean(endDate)!==Boolean(endTime)){showAlert('Preencha data e hora de chegada juntas, ou deixe ambas vazias.','error');return;}
+  const updated={...trip,driverId:driver.id,driverName:driver.name,vehicle:document.getElementById('e-vehicle').value,startTime:new Date(startDate+'T'+startTime).toISOString(),endTime:endDate?new Date(endDate+'T'+endTime).toISOString():null,kmStart:document.getElementById('e-km').value,kmEnd:document.getElementById('e-end-km').value,destination:document.getElementById('e-dest').value.trim(),os:document.getElementById('e-os').value.trim(),obsStart:document.getElementById('e-obs').value.trim(),obsEnd:document.getElementById('e-end-obs').value.trim(),status:endDate?'closed':'open'};
+  if(updated.endTime&&new Date(updated.endTime)<new Date(updated.startTime)){showAlert('A chegada não pode ocorrer antes da saída.','error');return;}
+  if(updated.kmStart&&updated.kmEnd&&Number(updated.kmEnd)<Number(updated.kmStart)){showAlert('O KM de chegada não pode ser menor que o KM de saída.','error');return;}
+  const fields=changedTripFields(trip,updated);
+  if(!fields.length){showAlert('Nenhum campo foi alterado.','error');return;}
+  updated.changeLog=[...(Array.isArray(trip.changeLog)?trip.changeLog:[]),{at:new Date().toISOString(),reason,fields}];
+  Object.assign(trip,updated);
   _saving=true;setBusy(btn,true,'<i class="ti ti-loader"></i> Salvando...');
   let ok=true;
   try{DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao editar viagem:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  closeModal();showAlert(ok?'Viagem atualizada!':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
+  closeModal();showAlert(ok?'Alteração registrada no histórico.':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
 }
 
 // ─── REGISTROS ───────────────────────────────────────────────────────────────
@@ -220,13 +309,18 @@ function renderRegistros(c){
     '<div class="card"><div class="card-title"><i class="ti ti-search"></i> Buscar registros</div>'+
     '<div class="row"><div class="field"><label>Data</label><input type="date" id="filter-date" value="'+filterDate+'" onchange="filterRegistros()"></div>'+
     '<div class="field"><label>Motorista</label><select id="filter-driver-val" onchange="filterRegistros()"><option value="">Todos</option>'+
-      DB.drivers().map(d=>'<option value="'+d.id+'" '+(filterDriver==d.id?'selected':'')+'>'+d.name+'</option>').join('')+
+      DB.drivers().map(d=>'<option value="'+d.id+'" '+(filterDriver==d.id?'selected':'')+'>'+escapeHTML(d.name)+'</option>').join('')+
     '</select></div></div>'+
     (filterDate||filterDriver?'<button class="btn btn-secondary btn-sm" onclick="clearFilter()"><i class="ti ti-x"></i> Limpar filtro</button>':'')+
     '</div>'+
     '<div class="stat-grid"><div class="stat"><div class="stat-num">'+trips.length+'</div><div class="stat-label">Viagens</div></div><div class="stat"><div class="stat-num">'+trips.filter(t=>t.status==='open').length+'</div><div class="stat-label">Em aberto</div></div><div class="stat"><div class="stat-num">'+km+'</div><div class="stat-label">KM total</div></div></div>'+
     (trips.length===0?'<div class="empty"><i class="ti ti-map-off"></i>Nenhum registro encontrado</div>':'')+
-    trips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+t.driverName+'</div><div class="trip-meta"><span><i class="ti ti-calendar"></i>'+fmtDate(t.startTime)+'</span><span><i class="ti ti-car"></i>'+t.vehicle+'</span><span><i class="ti ti-hash"></i>OS: '+(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+(t.destination||'-')+'</span>'+(t.kmStart?'<span><i class="ti ti-road"></i>'+t.kmStart+' \u2192 '+(t.kmEnd||'?')+' km</span>':'')+'</div><div class="trip-meta" style="margin-top:4px"><span><i class="ti ti-clock"></i>Sa\u00edda: '+fmt(t.startTime)+'</span>'+(t.endTime?'<span><i class="ti ti-flag"></i>Chegada: '+fmt(t.endTime)+'</span>':'')+'</div>'+(t.obsStart?'<div style="font-size:12px;color:#666;margin-top:5px;padding:5px 8px;background:#f8f8f5;border-radius:6px">'+t.obsStart+'</div>':'')+'</div><span class="tag '+(t.status==='open'?'tag-open':'tag-closed')+'">'+(t.status==='open'?'Em aberto':'Conclu\u00edda')+'</span></div><div class="actions">'+(t.status==='open'?'<button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Chegada</button>':'')+(t.photoStart||t.photoEnd?'<button class="btn btn-secondary btn-sm" onclick="viewPhotos('+t.id+')"><i class="ti ti-photo"></i> Fotos</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="editTrip('+t.id+')"><i class="ti ti-edit"></i></button></div></div>').join('');
+    trips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-calendar"></i>'+fmtDate(t.startTime)+'</span><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+escapeHTML(t.destination||'-')+'</span>'+(t.kmStart?'<span><i class="ti ti-road"></i>'+t.kmStart+' \u2192 '+(t.kmEnd||'?')+' km</span>':'')+'</div><div class="trip-meta" style="margin-top:4px"><span><i class="ti ti-clock"></i>Sa\u00edda: '+fmt(t.startTime)+'</span>'+(t.endTime?'<span><i class="ti ti-flag"></i>Chegada: '+fmt(t.endTime)+'</span>':'')+'</div>'+(t.obsStart?'<div style="font-size:12px;color:#666;margin-top:5px;padding:5px 8px;background:#f8f8f5;border-radius:6px">'+escapeHTML(t.obsStart)+'</div>':'')+'</div><span class="tag '+(t.status==='open'?'tag-open':'tag-closed')+'">'+(t.status==='open'?'Em aberto':'Conclu\u00edda')+'</span></div><div class="actions">'+(t.status==='open'?'<button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Chegada</button>':'')+(t.photoStart||t.photoEnd?'<button class="btn btn-secondary btn-sm" onclick="viewPhotos('+t.id+')"><i class="ti ti-photo"></i> Fotos</button>':'')+(t.changeLog?.length?'<button class="btn btn-secondary btn-sm" onclick="viewTripHistory('+t.id+')"><i class="ti ti-history"></i> Histórico</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="editTrip('+t.id+')"><i class="ti ti-edit"></i></button></div></div>').join('');
+}
+
+function viewTripHistory(tripId){
+  const trip=DB.trips().find(item=>item.id===tripId),changes=trip?.changeLog||[];if(!trip||!changes.length)return;
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Histórico de alterações<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div>'+changes.slice().reverse().map(change=>'<div class="audit-entry"><div><strong>'+fmt(change.at)+'</strong><br><span>Campos: '+escapeHTML((change.fields||[]).join(', '))+'</span></div><p>'+escapeHTML(change.reason)+'</p></div>').join('')+'</div></div>';
 }
 
 async function deleteTrip(id){
@@ -296,14 +390,29 @@ async function toggleDriver(id){
 // ─── OCORRÊNCIAS ─────────────────────────────────────────────────────────────
 function renderOcorrencias(c){
   const incidents=DB.incidents().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const fines=incidents.filter(inc=>inc.type==='multa');
+  const totalFines=fines.reduce((total,inc)=>total+(Number(inc.value)||0),0);
+  const blocked=incidents.filter(inc=>inc.blocksVehicle&&inc.status!=='resolved');
   c.innerHTML=alertHTML()+
-    '<div class="section-header"><span class="section-title">Ocorr\u00eancias registradas</span><button class="btn btn-primary btn-sm" onclick="openAddIncident()"><i class="ti ti-plus"></i> Nova</button></div>'+
+    '<div class="section-header"><span class="section-title">Ocorr\u00eancias e multas</span><button class="btn btn-primary btn-sm" onclick="openAddIncident()"><i class="ti ti-plus"></i> Nova</button></div>'+
+    '<div class="card fine-summary"><div class="card-title"><i class="ti ti-receipt-2"></i> Consulta de multas registradas</div><div class="stat-grid"><div class="stat"><div class="stat-num">'+fines.length+'</div><div class="stat-label">Multas cadastradas</div></div><div class="stat"><div class="stat-num">R$ '+totalFines.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div><div class="stat-label">Valor acumulado</div></div><div class="stat"><div class="stat-num">'+blocked.length+'</div><div class="stat-label">Chamados bloqueando veículos</div></div></div><p class="fine-note"><i class="ti ti-info-circle"></i> Esta consulta mostra as multas registradas no sistema. Para consultar multas oficiais é necessário integrar uma fonte autorizada com placa e credenciais.</p></div>'+
+    '<div class="card"><div class="card-title"><i class="ti ti-search"></i> Consultar multas oficiais</div><div class="row"><div class="field"><label>Placa</label><input type="text" id="fine-plate" maxlength="7" autocomplete="off" placeholder="ABC1D23" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,\'\')"></div><div class="field"><label>RENAVAM</label><input type="text" id="fine-renavam" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="Somente números" oninput="this.value=this.value.replace(/\\D/g,\'\')"></div></div><p class="fine-note"><i class="ti ti-shield-lock"></i> A consulta oficial abre o portal do DNIT. O resultado depende da autenticação e das validações exigidas pelo órgão.</p><div class="actions"><button class="btn btn-primary" onclick="consultOfficialFines()"><i class="ti ti-external-link"></i> Consultar no portal oficial</button><button class="btn btn-secondary" onclick="openManualFine()"><i class="ti ti-plus"></i> Registrar multa manualmente</button></div></div>'+
     (incidents.length===0?'<div class="empty"><i class="ti ti-shield-check"></i>Nenhuma ocorr\u00eancia registrada</div>':'')+
-    incidents.map(inc=>'<div class="incident-row '+(inc.type==='outro'?'info':'')+'"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div style="font-weight:600;font-size:14px;color:'+(inc.type==='outro'?'#CC5500':'#791F1F')+'">'+(inc.type==='multa'?'Multa':inc.type==='acidente'?'Acidente':'Ocorr\u00eancia')+' \u2014 '+inc.driverName+'</div><div style="font-size:12px;color:#666;margin-top:2px">'+fmtDate(inc.date)+' \u2022 '+inc.vehicle+' \u2022 OS: '+(inc.os||'-')+'</div><div style="font-size:13px;margin-top:6px">'+inc.description+'</div>'+(inc.value?'<div style="font-size:12px;margin-top:4px;font-weight:600">Valor: R$ '+parseFloat(inc.value).toFixed(2)+'</div>':'')+'</div><button class="btn btn-danger btn-sm" onclick="printIncident('+inc.id+')"><i class="ti ti-printer"></i></button><button class="btn btn-danger btn-sm" onclick="deleteIncident('+inc.id+')" style="flex-shrink:0"><i class="ti ti-trash"></i></button></div></div>').join('');
+    incidents.map(inc=>{const isBlocked=inc.blocksVehicle&&inc.status!=='resolved';const type=inc.type==='multa'?'Multa':inc.type==='acidente'?'Acidente':inc.type==='chamado'?'Chamado':'Ocorrência';return '<div class="incident-row '+(inc.type==='outro'?'info':'')+'"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div style="font-weight:600;font-size:14px;color:'+(inc.type==='outro'?'#CC5500':'#791F1F')+'">'+type+' — '+escapeHTML(inc.driverName)+'</div><div style="font-size:12px;color:#666;margin-top:2px">'+fmtDate(inc.date)+' • '+vehicleLabel(inc.vehicle)+' • OS: '+escapeHTML(inc.os||'-')+(inc.plate?' • Placa: '+escapeHTML(inc.plate):'')+'</div><div style="font-size:13px;margin-top:6px">'+escapeHTML(inc.description)+'</div>'+(inc.value?'<div style="font-size:12px;margin-top:4px;font-weight:600">Valor: R$ '+Number(inc.value).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>':'')+(isBlocked?'<span class="tag tag-open" style="margin-top:8px"><i class="ti ti-lock"></i> Veículo bloqueado</span>':'')+'</div><div class="actions incident-actions">'+(isBlocked?'<button class="btn btn-success btn-sm" onclick="resolveIncident('+inc.id+')"><i class="ti ti-lock-open"></i> Resolver</button>':'')+'<button class="btn btn-danger btn-sm" onclick="printIncident('+inc.id+')"><i class="ti ti-printer"></i></button><button class="btn btn-danger btn-sm" onclick="deleteIncident('+inc.id+')"><i class="ti ti-trash"></i></button></div></div></div>';}).join('');
 }
 
 function openAddIncident(){
-  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Nova ocorr\u00eancia <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="row"><div class="field"><label>Tipo</label><select id="inc-type"><option value="multa">Multa</option><option value="acidente">Acidente</option><option value="outro">Outro</option></select></div><div class="field"><label>Data</label><input type="date" id="inc-date" value="'+new Date().toISOString().split('T')[0]+'"></div></div><div class="row"><div class="field"><label>Motorista</label><select id="inc-driver"><option value="">Selecione...</option>'+DB.drivers().map(d=>'<option value="'+d.id+'">'+d.name+'</option>').join('')+'</select></div><div class="field"><label>Ve\u00edculo</label><select id="inc-vehicle"><option>FIORINO</option><option>STRADA</option></select></div></div><div class="row"><div class="field"><label>N\u00ba OS vinculada</label><input type="text" id="inc-os" placeholder="Opcional"></div><div class="field"><label>Valor (R$)</label><input type="number" id="inc-value" placeholder="0,00" step="0.01"></div></div><div class="field"><label>Descri\u00e7\u00e3o *</label><textarea id="inc-desc" placeholder="Descreva a ocorr\u00eancia em detalhes..."></textarea></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addIncident(this)"><i class="ti ti-plus"></i> Registrar ocorr\u00eancia</button></div></div>';
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Nova ocorrência <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="row"><div class="field"><label>Tipo</label><select id="inc-type" onchange="toggleVehicleBlockHint()"><option value="multa">Multa</option><option value="chamado">Chamado / manutenção</option><option value="acidente">Acidente</option><option value="outro">Outro</option></select></div><div class="field"><label>Data</label><input type="date" id="inc-date" value="'+new Date().toISOString().split('T')[0]+'"></div></div><div class="row"><div class="field"><label>Motorista</label><select id="inc-driver"><option value="">Selecione...</option>'+DB.drivers().map(d=>'<option value="'+d.id+'">'+escapeHTML(d.name)+'</option>').join('')+'</select></div><div class="field"><label>Veículo</label><select id="inc-vehicle"><option>FIORINO</option><option>STRADA</option></select></div></div><div class="row"><div class="field"><label>Nº OS vinculada</label><input type="text" id="inc-os" placeholder="Opcional"></div><div class="field"><label>Valor (R$)</label><input type="number" id="inc-value" placeholder="0,00" step="0.01" min="0"></div></div><label class="block-option"><input type="checkbox" id="inc-blocks-vehicle"> Bloquear este veículo para novas viagens até o chamado ser resolvido</label><p id="incident-block-hint" class="fine-note"></p><div class="field"><label>Descrição *</label><textarea id="inc-desc" maxlength="2000" placeholder="Descreva a ocorrência em detalhes..."></textarea></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addIncident(this)"><i class="ti ti-plus"></i> Registrar ocorrência</button></div></div>';
+  toggleVehicleBlockHint();
+}
+
+function toggleVehicleBlockHint(){
+  const isCall=document.getElementById('inc-type')?.value==='chamado';
+  const checkbox=document.getElementById('inc-blocks-vehicle');
+  const hint=document.getElementById('incident-block-hint');
+  if(!checkbox||!hint)return;
+  if(isCall) checkbox.checked=true;
+  hint.textContent=isCall ? 'Chamados bloqueiam o veículo por padrão; resolva o chamado para liberá-lo.' : 'Use o bloqueio quando o veículo não puder sair até a resolução da ocorrência.';
 }
 
 async function addIncident(btn){
@@ -311,7 +420,8 @@ async function addIncident(btn){
   const dId=document.getElementById('inc-driver').value,desc=document.getElementById('inc-desc').value.trim();
   if(!desc){alert('Descreva a ocorr\u00eancia!');return;}
   const driver=DB.drivers().find(d=>d.id==dId);
-  const incident={id:genId(),type:document.getElementById('inc-type').value,date:document.getElementById('inc-date').value,driverId:dId?parseInt(dId):null,driverName:driver?driver.name:'N\u00e3o informado',vehicle:document.getElementById('inc-vehicle').value,os:document.getElementById('inc-os').value,value:document.getElementById('inc-value').value,description:desc};
+  const blocksVehicle=document.getElementById('inc-blocks-vehicle').checked;
+  const incident={id:genId(),type:document.getElementById('inc-type').value,date:document.getElementById('inc-date').value,driverId:dId?parseInt(dId):null,driverName:driver?driver.name:'Não informado',vehicle:document.getElementById('inc-vehicle').value,os:document.getElementById('inc-os').value.trim(),value:document.getElementById('inc-value').value,description:desc,plate:normalizePlate(document.getElementById('inc-plate')?.value),renavam:normalizeRenavam(document.getElementById('inc-renavam')?.value),blocksVehicle,status:blocksVehicle?'open':'resolved',resolvedAt:null};
   const incidents=DB.incidents();incidents.push(incident);
   _saving=true;setBusy(btn,true,'<i class="ti ti-loader"></i> Salvando...');
   let ok=true;
@@ -326,6 +436,15 @@ async function deleteIncident(id){
   DB.save('incidents',DB.incidents().filter(i=>i.id!==id));
   if(USE_SUPABASE){await DB.removeOne('incidents',id);}
   renderOcorrencias(document.getElementById('main-content'));
+}
+
+async function resolveIncident(id){
+  const incident=DB.incidents().find(item=>item.id===id);if(!incident)return;
+  if(!confirm('Resolver este chamado e liberar o veículo para novas viagens?'))return;
+  incident.status='resolved';incident.resolvedAt=new Date().toISOString();
+  DB.save('incidents',DB.incidents());
+  if(USE_SUPABASE) await DB.saveOne('incidents',incident);
+  showAlert(incident.vehicle+' liberado para novas viagens.');
 }
 
 async function printIncident(id){
@@ -368,7 +487,7 @@ function renderRelatorio(c){
   c.innerHTML=alertHTML()+
     '<div class="card"><div class="card-title"><i class="ti ti-file-text"></i> Relat\u00f3rio mensal para assinatura</div>'+
     '<div class="row"><div class="field"><label>Motorista</label><select id="rel-driver" onchange="relDriver=this.value;renderRelatorio(document.getElementById(\'main-content\'))"><option value="">Todos os motoristas</option>'+
-      DB.drivers().map(d=>'<option value="'+d.id+'" '+(relDriver==d.id?'selected':'')+'>'+d.name+'</option>').join('')+
+      DB.drivers().map(d=>'<option value="'+d.id+'" '+(relDriver==d.id?'selected':'')+'>'+escapeHTML(d.name)+'</option>').join('')+
     '</select></div><div class="field"><label>M\u00eas / Ano</label><input type="month" id="rel-month" value="'+relMonth+'" onchange="relMonth=this.value;renderRelatorio(document.getElementById(\'main-content\'))"></div></div></div>'+
     buildReport();
 }
