@@ -7,16 +7,32 @@
                    <link rel="icon" type="image/png" href="logo-printminas.png">
                    <link rel="preconnect" href="https://fonts.googleapis.com">
                    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-                   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+                   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
                    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
                    <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app">
-    <div class="header">      <div class="logo"><img src="logo-printminas.png" alt="Print Minas"></div>     <div>        <h1>Gestão de Frota</h1>        <p>Controle de uso de veículos da Print Minas.</p>      </div>
-    </div>
-    <nav class="nav">      <button class="nav-btn active" onclick="showTab('viagem')"><i class="ti ti-map-pin"></i>Nova Viagem</button>      <button class="nav-btn" onclick="showTab('registros')"><i class="ti ti-list"></i>Registros</button>      <button class="nav-btn" onclick="showTab('motoristas')"><i class="ti ti-users"></i>Motoristas</button>      <button class="nav-btn" onclick="showTab('ocorrencias')"><i class="ti ti-alert-triangle"></i>Ocorrências</button>      <button class="nav-btn" onclick="showTab('relatorio')"><i class="ti ti-file-text"></i>Relatório</button>    </nav>
-    <div class="content" id="main-content"></div>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo"><img src="logo-printminas.png" alt="Print Minas"></div>
+        <div>
+          <h1>Frota</h1>
+          <p>Print Minas</p>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" onclick="showTab('visao')"><i class="ti ti-layout-dashboard"></i>Visão geral</button>
+        <button class="nav-btn" onclick="showTab('viagem')"><i class="ti ti-map-pin"></i>Nova viagem</button>
+        <button class="nav-btn" onclick="showTab('registros')"><i class="ti ti-list"></i>Registros</button>
+        <button class="nav-btn" onclick="showTab('motoristas')"><i class="ti ti-users"></i>Motoristas</button>
+        <button class="nav-btn" onclick="showTab('ocorrencias')"><i class="ti ti-alert-triangle"></i>Ocorrências</button>
+        <button class="nav-btn" onclick="showTab('relatorio')"><i class="ti ti-file-text"></i>Relatório</button>
+      </nav>
+    </aside>
+
+    <main class="main" id="main-content"></main>
   </div>
   <div id="modal-container"></div>
   <!-- Banco de dados -->
