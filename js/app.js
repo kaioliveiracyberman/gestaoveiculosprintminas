@@ -44,7 +44,23 @@ function setupPWA(){
   const installButton=document.getElementById('install-app');
   window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;if(installButton)installButton.hidden=false;});
   installButton?.addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;installButton.hidden=true;});
-  window.addEventListener('online',async()=>{const result=await DB.syncPending();if(result.synced)showAlert(result.synced+' registro(s) sincronizado(s).');});
+  window.addEventListener('online',async()=>{const result=await DB.syncPending();if(result.synced)showAlert(result.synced+' registro(s) sincronizado(s).');await refreshFromServer();});
+  window.addEventListener('focus',()=>refreshFromServer());
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshFromServer();});
+  setInterval(()=>{const editing=document.activeElement?.matches('input,textarea,select');if(document.visibilityState==='visible'&&!editing)refreshFromServer();},30000);
+}
+let remoteRefreshPromise=null;
+async function refreshFromServer(){
+  if(!USE_SUPABASE||!navigator.onLine)return false;
+  if(remoteRefreshPromise)return remoteRefreshPromise;
+  remoteRefreshPromise=(async()=>{
+    const pending=await DB.syncPending();
+    if(pending.pending)return false;
+    await DB.syncFromRemote();
+    showTab(activeTab);
+    return true;
+  })().catch(error=>{console.warn('Falha ao atualizar dados do servidor:',error);return false;}).finally(()=>{remoteRefreshPromise=null;});
+  return remoteRefreshPromise;
 }
 function applyTheme(theme){
   document.body.classList.toggle('dark-theme',theme==='dark');
@@ -300,7 +316,7 @@ async function startTrip(btn){
   try{const trips=DB.trips();trips.push(trip);DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao registrar sa\u00edda:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  if(ok){showAlert('Rota iniciada com sucesso!');}
+  if(ok){await refreshFromServer();showAlert('Rota iniciada com sucesso!');}
   else{const detail=window.__LAST_SUPABASE_ERROR__?.message||'Verifique a conexão e a atualização da tabela no Supabase.';showAlert('A rota foi salva neste aparelho, mas não no Supabase: '+detail,'error');}
 }
 
@@ -326,7 +342,7 @@ async function closeTrip(tripId,btn){
   catch(err){console.error('Erro ao registrar chegada:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
   closeModal();
-  if(ok)showAlert('Rota finalizada com sucesso!');
+  if(ok){await refreshFromServer();showAlert('Rota finalizada com sucesso!');}
   else{const detail=window.__LAST_SUPABASE_ERROR__?.message||'Verifique a conexão e a atualização da tabela no Supabase.';showAlert('O retorno foi salvo neste aparelho, mas não no Supabase: '+detail,'error');}
 }
 

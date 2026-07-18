@@ -1,4 +1,4 @@
-const CACHE_NAME='print-minas-frota-v2';
+const CACHE_NAME='print-minas-frota-v3';
 const APP_SHELL=['./','index.html','style.css','manifest.webmanifest','logo-printminas.png','js/config.js','js/db.js','js/app.js'];
 
 self.addEventListener('install',event=>{
@@ -9,11 +9,14 @@ self.addEventListener('activate',event=>{
 });
 self.addEventListener('fetch',event=>{
   if(event.request.method!=='GET')return;
-  event.respondWith(caches.match(event.request).then(cached=>{
-    const network=fetch(event.request).then(response=>{
-      if(response&&response.ok){const copy=response.clone();caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy));}
-      return response;
-    }).catch(()=>cached);
-    return cached||network;
-  }));
+  const url=new URL(event.request.url);
+  // Dados remotos, como os do Supabase, nunca entram no cache: cada aparelho
+  // precisa consultar a versão atual da rota registrada pela equipe.
+  if(url.origin!==self.location.origin){event.respondWith(fetch(event.request));return;}
+  // Arquivos do aplicativo são buscados primeiro na rede e só usam o cache
+  // como reserva offline. Assim uma nova publicação chega sem dados antigos.
+  event.respondWith(fetch(event.request).then(response=>{
+    if(response&&response.ok){const copy=response.clone();caches.open(CACHE_NAME).then(cache=>cache.put(event.request,copy));}
+    return response;
+  }).catch(()=>caches.match(event.request)));
 });
