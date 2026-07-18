@@ -395,7 +395,7 @@ function renderOcorrencias(c){
   const blocked=incidents.filter(inc=>inc.blocksVehicle&&inc.status!=='resolved');
   c.innerHTML=alertHTML()+
     '<div class="section-header"><span class="section-title">Ocorr\u00eancias e multas</span><button class="btn btn-primary btn-sm" onclick="openAddIncident()"><i class="ti ti-plus"></i> Nova</button></div>'+
-    '<div class="card fine-summary"><div class="card-title"><i class="ti ti-receipt-2"></i> Consulta de multas registradas</div><div class="stat-grid"><div class="stat"><div class="stat-num">'+fines.length+'</div><div class="stat-label">Multas cadastradas</div></div><div class="stat"><div class="stat-num">R$ '+totalFines.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div><div class="stat-label">Valor acumulado</div></div><div class="stat"><div class="stat-num">'+blocked.length+'</div><div class="stat-label">Chamados bloqueando veículos</div></div></div><p class="fine-note"><i class="ti ti-info-circle"></i> Esta consulta mostra as multas registradas no sistema. Para consultar multas oficiais é necessário integrar uma fonte autorizada com placa e credenciais.</p></div>'+
+    '<div class="card fine-summary"><div class="card-title"><i class="ti ti-receipt-2"></i> Consulta de multas registradas</div><div class="stat-grid"><div class="stat"><div class="stat-num">'+fines.length+'</div><div class="stat-label">Multas cadastradas</div></div><div class="stat"><div class="stat-num">R$ '+totalFines.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div><div class="stat-label">Valor acumulado</div></div><div class="stat"><div class="stat-num">'+blocked.length+'</div><div class="stat-label">Chamados bloqueando veículos</div></div></div><p class="fine-note"><i class="ti ti-info-circle"></i></p></div>'+
     '<div class="card"><div class="card-title"><i class="ti ti-search"></i> Consultar multas oficiais</div><div class="row"><div class="field"><label>Placa</label><input type="text" id="fine-plate" maxlength="7" autocomplete="off" placeholder="ABC1D23" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,\'\')"></div><div class="field"><label>RENAVAM</label><input type="text" id="fine-renavam" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="Somente números" oninput="this.value=this.value.replace(/\\D/g,\'\')"></div></div><p class="fine-note"><i class="ti ti-shield-lock"></i> A consulta oficial abre o portal do DNIT. O resultado depende da autenticação e das validações exigidas pelo órgão.</p><div class="actions"><button class="btn btn-primary" onclick="consultOfficialFines()"><i class="ti ti-external-link"></i> Consultar no portal oficial</button><button class="btn btn-secondary" onclick="openManualFine()"><i class="ti ti-plus"></i> Registrar multa manualmente</button></div></div>'+
     (incidents.length===0?'<div class="empty"><i class="ti ti-shield-check"></i>Nenhuma ocorr\u00eancia registrada</div>':'')+
     incidents.map(inc=>{const isBlocked=inc.blocksVehicle&&inc.status!=='resolved';const type=inc.type==='multa'?'Multa':inc.type==='acidente'?'Acidente':inc.type==='chamado'?'Chamado':'Ocorrência';return '<div class="incident-row '+(inc.type==='outro'?'info':'')+'"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div style="font-weight:600;font-size:14px;color:'+(inc.type==='outro'?'#CC5500':'#791F1F')+'">'+type+' — '+escapeHTML(inc.driverName)+'</div><div style="font-size:12px;color:#666;margin-top:2px">'+fmtDate(inc.date)+' • '+vehicleLabel(inc.vehicle)+' • OS: '+escapeHTML(inc.os||'-')+(inc.plate?' • Placa: '+escapeHTML(inc.plate):'')+'</div><div style="font-size:13px;margin-top:6px">'+escapeHTML(inc.description)+'</div>'+(inc.value?'<div style="font-size:12px;margin-top:4px;font-weight:600">Valor: R$ '+Number(inc.value).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>':'')+(isBlocked?'<span class="tag tag-open" style="margin-top:8px"><i class="ti ti-lock"></i> Veículo bloqueado</span>':'')+'</div><div class="actions incident-actions">'+(isBlocked?'<button class="btn btn-success btn-sm" onclick="resolveIncident('+inc.id+')"><i class="ti ti-lock-open"></i> Resolver</button>':'')+'<button class="btn btn-danger btn-sm" onclick="printIncident('+inc.id+')"><i class="ti ti-printer"></i></button><button class="btn btn-danger btn-sm" onclick="deleteIncident('+inc.id+')"><i class="ti ti-trash"></i></button></div></div></div>';}).join('');
@@ -482,24 +482,39 @@ async function printIncident(id){
 
 // ─── RELATÓRIO ───────────────────────────────────────────────────────────────
 let relDriver='',relMonth=new Date().toISOString().slice(0,7);
+function reportMonthLabel(month=relMonth){
+  if(!/^\d{4}-\d{2}$/.test(month))return month;
+  const [year,number]=month.split('-').map(Number);
+  return new Date(year,number-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+}
+function reportData(){
+  const drivers=relDriver?DB.drivers().filter(driver=>driver.id==relDriver):DB.drivers();
+  return drivers.map(driver=>({driver,trips:DB.trips().filter(trip=>trip.driverId===driver.id&&trip.startTime?.startsWith(relMonth)),incidents:DB.incidents().filter(incident=>incident.driverId===driver.id&&incident.date?.startsWith(relMonth))}));
+}
+function reportSummary(data){
+  const trips=data.flatMap(item=>item.trips),incidents=data.flatMap(item=>item.incidents);
+  return {trips:trips.length,open:trips.filter(trip=>trip.status==='open').length,km:calcKm(trips),incidents:incidents.length,fines:incidents.filter(incident=>incident.type==='multa').reduce((total,incident)=>total+(Number(incident.value)||0),0)};
+}
 
 function renderRelatorio(c){
+  const data=reportData(),summary=reportSummary(data);
   c.innerHTML=alertHTML()+
-    '<div class="card"><div class="card-title"><i class="ti ti-file-text"></i> Relat\u00f3rio mensal para assinatura</div>'+
+    '<div class="report-hero"><div><p class="report-eyebrow"><i class="ti ti-file-text"></i> Relatórios mensais</p><h2>Resumo de utilização da frota</h2><p>Consulte as viagens, ocorrências e documentos prontos para assinatura.</p></div><span class="report-period">'+escapeHTML(reportMonthLabel())+'</span></div>'+
+    '<div class="card report-filter"><div class="card-title"><i class="ti ti-adjustments-horizontal"></i> Filtros do relatório</div>'+
     '<div class="row"><div class="field"><label>Motorista</label><select id="rel-driver" onchange="relDriver=this.value;renderRelatorio(document.getElementById(\'main-content\'))"><option value="">Todos os motoristas</option>'+
       DB.drivers().map(d=>'<option value="'+d.id+'" '+(relDriver==d.id?'selected':'')+'>'+escapeHTML(d.name)+'</option>').join('')+
     '</select></div><div class="field"><label>M\u00eas / Ano</label><input type="month" id="rel-month" value="'+relMonth+'" onchange="relMonth=this.value;renderRelatorio(document.getElementById(\'main-content\'))"></div></div></div>'+
-    buildReport();
+    '<div class="report-summary-grid"><div class="report-summary"><span>Viagens</span><strong>'+summary.trips+'</strong></div><div class="report-summary"><span>Em aberto</span><strong>'+summary.open+'</strong></div><div class="report-summary"><span>KM percorridos</span><strong>'+summary.km+'</strong></div><div class="report-summary"><span>Multas</span><strong>R$ '+summary.fines.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</strong></div></div>'+
+    buildReport(data);
 }
 
-function buildReport(){
-  const targetDrivers=relDriver?DB.drivers().filter(d=>d.id==relDriver):DB.drivers();
-  return targetDrivers.map(driver=>{
-    const trips=DB.trips().filter(t=>t.driverId===driver.id&&t.startTime.startsWith(relMonth));
-    const incidents=DB.incidents().filter(i=>i.driverId===driver.id&&i.date.startsWith(relMonth));
+function buildReport(data=reportData()){
+  const active=data.filter(item=>item.trips.length||item.incidents.length);
+  if(!active.length)return '<div class="report-empty"><i class="ti ti-calendar-off"></i><strong>Nenhum dado encontrado</strong><span>Não há viagens ou ocorrências em '+escapeHTML(reportMonthLabel())+'.</span></div>';
+  return active.map(({driver,trips,incidents})=>{
     const km=calcKm(trips);
-    if(!trips.length&&!incidents.length)return '<div class="report-section" style="opacity:.55"><div style="display:flex;align-items:center;gap:10px"><div class="avatar">'+initials(driver.name)+'</div><div><div style="font-weight:600">'+driver.name+'</div><div style="font-size:12px;color:#888">Sem registros em '+relMonth+'</div></div></div></div>';
-    return '<div class="report-section"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px"><div style="display:flex;align-items:center;gap:10px"><div class="avatar">'+initials(driver.name)+'</div><div><div style="font-weight:600;font-size:15px">'+driver.name+'</div><div style="font-size:12px;color:#666">CNH: '+(driver.cnh||'-')+' \u2022 '+relMonth+'</div></div></div><button class="btn btn-secondary btn-sm" onclick="printDriver('+driver.id+')"><i class="ti ti-printer"></i> Imprimir / Assinar</button></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px"><div class="stat"><div class="stat-num">'+trips.length+'</div><div class="stat-label">Viagens</div></div><div class="stat"><div class="stat-num">'+km+'</div><div class="stat-label">KM percorridos</div></div><div class="stat"><div class="stat-num">'+incidents.length+'</div><div class="stat-label">Ocorr\u00eancias</div></div></div>'+(trips.length?'<div style="overflow-x:auto"><table class="report-table"><thead><tr><th>Data</th><th>OS</th><th>Ve\u00edculo</th><th>Destino</th><th>Sa\u00edda</th><th>Chegada</th><th>KM</th></tr></thead><tbody>'+trips.map(t=>'<tr><td>'+fmtDate(t.startTime)+'</td><td>'+(t.os||'-')+'</td><td>'+t.vehicle+'</td><td>'+(t.destination||'-')+'</td><td>'+fmtTime(t.startTime)+'</td><td>'+(t.endTime?fmtTime(t.endTime):'-')+'</td><td>'+(t.kmStart&&t.kmEnd?(parseInt(t.kmEnd)-parseInt(t.kmStart))+'km':'-')+'</td></tr>').join('')+'</tbody></table></div>':'')+(incidents.length?'<div style="margin-top:12px"><div style="font-size:12px;font-weight:600;color:#A32D2D;margin-bottom:6px"><i class="ti ti-alert-triangle"></i> Ocorr\u00eancias no per\u00edodo</div>'+incidents.map(i=>'<div style="font-size:12px;padding:6px 10px;background:#FCEBEB;border-radius:6px;margin-bottom:4px">'+fmtDate(i.date)+' \u2014 '+i.type+': '+i.description+(i.value?' (R$ '+parseFloat(i.value).toFixed(2)+')':'')+'</div>').join('')+'</div>':'')+'<div style="margin-top:20px;padding:14px;border:1.5px dashed rgba(0,0,0,0.15);border-radius:8px"><p style="font-size:12px;color:#666;margin-bottom:24px">Declaro que as informa\u00e7\u00f5es acima s\u00e3o ver\u00eddicas e que utilizei os ve\u00edculos conforme descrito, responsabilizando-me por qualquer uso indevido.</p><div style="display:flex;gap:24px"><div style="flex:2;border-top:1px solid #333;padding-top:6px;font-size:11px;color:#666;text-align:center">Assinatura \u2014 '+driver.name+'</div><div style="flex:1;border-top:1px solid #333;padding-top:6px;font-size:11px;color:#666;text-align:center">Data</div></div></div></div>';
+    const completed=trips.filter(trip=>trip.status==='closed').length;
+    return '<article class="report-section"><header class="report-driver-head"><div class="report-driver"><div class="avatar">'+initials(driver.name)+'</div><div><h3>'+escapeHTML(driver.name)+'</h3><p>CNH: '+escapeHTML(driver.cnh||'Não informada')+' · '+escapeHTML(reportMonthLabel())+'</p></div></div><button class="btn btn-secondary btn-sm" onclick="printDriver('+driver.id+')"><i class="ti ti-printer"></i> Gerar PDF para assinatura</button></header><div class="report-metrics"><div><strong>'+trips.length+'</strong><span>Viagens</span></div><div><strong>'+completed+'</strong><span>Concluídas</span></div><div><strong>'+km+' km</strong><span>KM percorridos</span></div><div><strong>'+incidents.length+'</strong><span>Ocorrências</span></div></div>'+(trips.some(trip=>trip.status==='open')?'<div class="report-warning"><i class="ti ti-clock-exclamation"></i> Há '+trips.filter(trip=>trip.status==='open').length+' viagem(ns) em aberto neste período.</div>':'')+(trips.length?'<div class="report-table-wrap"><table class="report-table"><thead><tr><th>Data</th><th>OS</th><th>Veículo</th><th>Destino</th><th>Saída</th><th>Chegada</th><th>KM</th><th>Status</th></tr></thead><tbody>'+trips.map(trip=>'<tr><td>'+fmtDate(trip.startTime)+'</td><td>'+escapeHTML(trip.os||'-')+'</td><td>'+vehicleLabel(trip.vehicle)+'</td><td>'+escapeHTML(trip.destination||'-')+'</td><td>'+fmtTime(trip.startTime)+'</td><td>'+(trip.endTime?fmtTime(trip.endTime):'—')+'</td><td>'+(trip.kmStart&&trip.kmEnd?(parseInt(trip.kmEnd)-parseInt(trip.kmStart))+' km':'—')+'</td><td><span class="tag '+(trip.status==='open'?'tag-open':'tag-closed')+'">'+(trip.status==='open'?'Em aberto':'Concluída')+'</span></td></tr>').join('')+'</tbody></table></div>':'<div class="report-no-trips">Nenhuma viagem registrada no período.</div>')+(incidents.length?'<section class="report-incidents"><h4><i class="ti ti-alert-triangle"></i> Ocorrências do período</h4>'+incidents.map(incident=>'<div><span>'+fmtDate(incident.date)+' · '+escapeHTML(incident.type)+'</span><p>'+escapeHTML(incident.description)+(incident.value?' · R$ '+Number(incident.value).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}):'')+'</p></div>').join('')+'</section>':'')+'<footer class="report-signature"><p>Declaro que as informações deste relatório são verdadeiras e que utilizei os veículos conforme os registros acima.</p><div><span>Assinatura — '+escapeHTML(driver.name)+'</span><span>Data</span></div></footer></article>';
   }).join('');
 }
 
@@ -508,6 +523,8 @@ async function printDriver(driverId){
   const trips=DB.trips().filter(t=>t.driverId==driverId&&t.startTime.startsWith(relMonth));
   const incidents=DB.incidents().filter(i=>i.driverId==driverId&&i.date.startsWith(relMonth));
   const km=calcKm(trips);
+  const completed=trips.filter(t=>t.status==='closed').length;
+  const fineTotal=incidents.filter(i=>i.type==='multa').reduce((total,i)=>total+(Number(i.value)||0),0);
   const btn=document.querySelector('[onclick="printDriver('+driverId+')"]');
   setBusy(btn,true,'<i class="ti ti-loader"></i> Gerando...');
   try{
@@ -517,9 +534,9 @@ async function printDriver(driverId){
     function ensureSpace(needed){if(y+needed>H-16){doc.addPage();drawHeader();y=44;}}
     drawHeader();y=44;doc.setTextColor(20,20,20);
     doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(driver.name,margin,y);y+=7;
-    doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90,90,90);doc.text('CNH: '+(driver.cnh||'-')+'  \u2022  Per\u00edodo: '+relMonth,margin,y);y+=10;
-    const cardW=(W-margin*2-12)/3;
-    [[String(trips.length),'Viagens'],[km+' km','KM percorridos'],[String(incidents.length),'Ocorr\u00eancias']].forEach((s,i)=>{
+    doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90,90,90);doc.text('CNH: '+(driver.cnh||'-')+'  \u2022  Per\u00edodo: '+reportMonthLabel(),margin,y);y+=10;
+    const cardW=(W-margin*2-18)/4;
+    [[String(trips.length),'Viagens'],[String(completed),'Conclu\u00eddas'],[km+' km','KM percorridos'],['R$ '+fineTotal.toFixed(2).replace('.',','),'Multas']].forEach((s,i)=>{
       const x=margin+i*(cardW+6);doc.setFillColor(245,245,240);doc.roundedRect(x,y,cardW,18,2,2,'F');doc.setTextColor(255,107,0);doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(s[0],x+cardW/2,y+9,{align:'center'});doc.setTextColor(130,130,130);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(s[1],x+cardW/2,y+14.5,{align:'center'});
     });
     y+=28;doc.setTextColor(20,20,20);
@@ -545,6 +562,8 @@ async function printDriver(driverId){
     const sigY=y+26,sigSplit=margin+(W-margin*2)*0.65;
     doc.setDrawColor(50,50,50);doc.line(margin+6,sigY,sigSplit-6,sigY);doc.line(sigSplit+6,sigY,W-margin-6,sigY);
     doc.setFontSize(8.5);doc.setTextColor(80,80,80);doc.text('Assinatura \u2014 '+driver.name,margin+6,sigY+5);doc.text('Data',sigSplit+6,sigY+5);
+    const pageCount=doc.getNumberOfPages();
+    for(let page=1;page<=pageCount;page++){doc.setPage(page);doc.setDrawColor(225,225,220);doc.line(margin,H-11,W-margin,H-11);doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(125,125,125);doc.text('Print Minas \u2022 Relat\u00f3rio mensal \u2022 '+reportMonthLabel(),margin,H-6);doc.text('P\u00e1gina '+page+' de '+pageCount,W-margin,H-6,{align:'right'});}
     doc.save('relatorio-'+driver.name.replace(/\s+/g,'_')+'-'+relMonth+'.pdf');
   }catch(e){console.error('Erro ao gerar PDF',e);alert('N\u00e3o foi poss\u00edvel gerar o PDF.\n\nDetalhe: '+(e&&e.message?e.message:e));}
   finally{setBusy(btn,false);}
