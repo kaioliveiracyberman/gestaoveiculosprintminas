@@ -182,6 +182,7 @@ function renderVisaoGeral(c){
     return 'background:#FAECE7;color:#993C1D';
   }
 
+  const ongoingRoutes=trips.filter(t=>!t.endTime).sort((a,b)=>new Date(a.startTime)-new Date(b.startTime));
   c.innerHTML=alertHTML()+'<section class="overview-panel">'+pageHero('ti-layout-dashboard','Painel operacional','Visão geral','Acompanhe a frota, rotas e atividades recentes.','Hoje')+
     '<div class="stat-grid-ov">'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'motoristas\')" title="Ver motoristas"><div class="stat-icon ic-blue"><i class="ti ti-users"></i></div><p class="stat-num-ov">'+activeDrivers+'</p><p class="stat-label-ov">Motoristas ativos</p></button>'+
@@ -191,6 +192,7 @@ function renderVisaoGeral(c){
       '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">'+monthIncidents+'</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">'+openBlocks+'</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>'+
     '</div></section>'+
+    (ongoingRoutes.length?'<div class="activity-card ongoing-routes-card"><div class="activity-title"><span><i class="ti ti-progress-check"></i> Rotas em andamento</span><button class="btn btn-secondary btn-sm" onclick="showTab(\'viagem\')">Ver rotas</button></div>'+ongoingRoutes.map(t=>'<button class="ongoing-route" onclick="showTab(\'viagem\')"><span class="ongoing-route-icon"><i class="ti ti-route-2"></i></span><span class="ongoing-route-info"><strong>'+escapeHTML(t.driverName)+'</strong><small>'+escapeHTML(vehicleLabel(t.vehicle))+(t.client?' · '+escapeHTML(t.client):t.destination?' · '+escapeHTML(t.destination):'')+'</small></span><span class="ongoing-route-time">há '+formatElapsedTime(t.startTime)+'</span><i class="ti ti-chevron-right"></i></button>').join('')+'</div>':'')+
     '<div class="activity-card">'+
       '<p class="activity-title">Atividades recentes</p>'+
       (feed.length===0?'<div class="empty"><i class="ti ti-map-off"></i>Nenhuma atividade registrada ainda</div>':
@@ -298,7 +300,8 @@ async function startTrip(btn){
   try{const trips=DB.trips();trips.push(trip);DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao registrar sa\u00edda:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  if(ok){showAlert('Rota iniciada com sucesso!');}else{showAlert('Salvo no aparelho, mas falhou no servidor.','error');}
+  if(ok){showAlert('Rota iniciada com sucesso!');}
+  else{const detail=window.__LAST_SUPABASE_ERROR__?.message||'Verifique a conexão e a atualização da tabela no Supabase.';showAlert('A rota foi salva neste aparelho, mas não no Supabase: '+detail,'error');}
 }
 
 function openArrival(tripId){
@@ -322,7 +325,9 @@ async function closeTrip(tripId,btn){
   try{DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao registrar chegada:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  closeModal();showAlert(ok?'Rota finalizada com sucesso!':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
+  closeModal();
+  if(ok)showAlert('Rota finalizada com sucesso!');
+  else{const detail=window.__LAST_SUPABASE_ERROR__?.message||'Verifique a conexão e a atualização da tabela no Supabase.';showAlert('O retorno foi salvo neste aparelho, mas não no Supabase: '+detail,'error');}
 }
 
 function inputDateTime(value){
