@@ -1,4 +1,5 @@
 // ─── Logo ────────────────────────────────────────────────────────────────────
+/* Print Minas - Gestão de Frota | Desenvolvido por Kaio Eduardo de Oliveira Barbosa */
 const LOGO_BASE64 = "data:image/png;base64,PLACEHOLDER_LOGO_BASE64";
 function hasValidLogo(){ return typeof LOGO_BASE64==='string'&&LOGO_BASE64.startsWith('data:image')&&!LOGO_BASE64.includes('PLACEHOLDER'); }
 function safeAddLogo(doc,x,y,w,h){ if(!hasValidLogo())return; try{doc.addImage(LOGO_BASE64,'PNG',x,y,w,h);}catch(err){console.warn('Logo error',err);} }
@@ -25,6 +26,34 @@ function loadJsPDF(){
 // ─── Navigation ──────────────────────────────────────────────────────────────
 const TAB_ORDER=['visao','viagem','registros','motoristas','ocorrencias','relatorio','qr'];
 let activeTab='visao',alertMsg=null;
+const ADMIN_EMAIL=String(_cfg?.ADMIN_EMAIL||'suporte@printminas.com.br').trim().toLowerCase();
+let adminSession=null;
+function isAdmin(){return !!adminSession;}
+function updateAdminAccess(){document.body.classList.toggle('admin-mode',isAdmin());const button=document.getElementById('admin-access');if(!button)return;button.classList.toggle('is-admin',isAdmin());button.innerHTML=(isAdmin()?'<i class="ti ti-shield-check"></i><span>Modo administrador</span>':'<i class="ti ti-lock"></i><span>Área administrativa</span>')+'<span class="brand-pop" aria-hidden="true"><img src="logo-printminas.png" alt=""></span>';}
+async function loadAdminSession(){if(!supabaseClient)return;const {data}=await supabaseClient.auth.getSession();const email=data.session?.user?.email?.toLowerCase();adminSession=email===ADMIN_EMAIL?data.session:null;if(data.session&&!adminSession)await supabaseClient.auth.signOut();updateAdminAccess();}
+function adminOnly(){if(isAdmin())return true;showAlert('Acesso restrito ao administrador.','error');return false;}
+function openAdminAccess(){
+  if(isAdmin()){document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal admin-modal"><div class="modal-title">Área administrativa<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="admin-badge"><i class="ti ti-shield-check"></i></div><h3>Você está no modo administrador</h3><p>'+escapeHTML(ADMIN_EMAIL)+'</p><button class="btn btn-secondary" style="width:100%" onclick="adminSignOut()"><i class="ti ti-logout"></i> Sair do modo administrador</button></div></div>';return;}
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal admin-modal"><div class="modal-title">Acesso administrativo<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="admin-badge"><i class="ti ti-lock"></i></div><h3>Entrar para editar</h3><p>Somente o administrador pode alterar ou excluir registros.</p><div class="field"><label>E-mail</label><input type="email" id="admin-email" value="'+escapeHTML(ADMIN_EMAIL)+'" autocomplete="username"></div><div class="field"><label>Senha</label><input type="password" id="admin-password" autocomplete="current-password" placeholder="Digite sua senha"></div><button class="btn btn-primary" style="width:100%" onclick="adminSignIn(this)"><i class="ti ti-login"></i> Entrar como administrador</button></div></div>';
+}
+async function adminSignIn(button){if(!supabaseClient){showAlert('Login indisponível: Supabase não configurado.','error');return;}const email=document.getElementById('admin-email').value.trim().toLowerCase(),password=document.getElementById('admin-password').value;if(email!==ADMIN_EMAIL){showAlert('Este e-mail não possui acesso administrativo.','error');return;}setBusy(button,true,'Entrando...');const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});setBusy(button,false);if(error||!data.session){showAlert('Não foi possível entrar. Confira e-mail e senha.','error');return;}adminSession=data.session;closeModal();updateAdminAccess();showAlert('Modo administrador ativado.');}
+async function adminSignOut(){if(supabaseClient)await supabaseClient.auth.signOut();adminSession=null;closeModal();updateAdminAccess();showAlert('Modo administrador encerrado.');}
+let installPrompt=null;
+function setupPWA(){
+  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(error=>console.warn('PWA service worker:',error));
+  const installButton=document.getElementById('install-app');
+  window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;if(installButton)installButton.hidden=false;});
+  installButton?.addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;installButton.hidden=true;});
+  window.addEventListener('online',async()=>{const result=await DB.syncPending();if(result.synced)showAlert(result.synced+' registro(s) sincronizado(s).');});
+}
+function applyTheme(theme){
+  document.body.classList.toggle('dark-theme',theme==='dark');
+  localStorage.setItem('pm_theme',theme);
+  const button=document.getElementById('theme-toggle');
+  if(button){button.innerHTML=theme==='dark'?'<i class="ti ti-sun"></i>':'<i class="ti ti-moon-stars"></i>';button.title=theme==='dark'?'Usar tema claro':'Usar tema escuro';}
+}
+function setupTheme(){applyTheme(localStorage.getItem('pm_theme')||'light');}
+function toggleTheme(){applyTheme(document.body.classList.contains('dark-theme')?'light':'dark');}
 
 // Todo texto informado pelo usuário passa por esta função antes de entrar no HTML.
 // Isso evita que nomes, observações e descrições sejam interpretados como código.
@@ -77,7 +106,23 @@ function showTab(tab){
   const c=document.getElementById('main-content');
   const renders={visao:renderVisaoGeral,viagem:renderViagem,registros:renderRegistros,motoristas:renderMotoristas,ocorrencias:renderOcorrencias,relatorio:renderRelatorio,qr:renderQR};
   renders[tab]&&renders[tab](c);
+  enhanceSelects(c);
 }
+
+function enhanceSelects(root=document){
+  if(window.matchMedia('(max-width: 640px)').matches)return;
+  root.querySelectorAll('select:not([data-custom-select])').forEach(select=>{
+    select.dataset.customSelect='true';
+    const wrap=document.createElement('div'),trigger=document.createElement('button'),menu=document.createElement('div');
+    wrap.className='custom-select';trigger.type='button';trigger.className='custom-select-trigger';menu.className='custom-select-menu';
+    select.parentNode.insertBefore(wrap,select);wrap.appendChild(select);wrap.appendChild(trigger);wrap.appendChild(menu);
+    const sync=()=>{const option=select.options[select.selectedIndex];trigger.innerHTML='<span>'+escapeHTML(option?.text||'Selecione')+'</span><i class="ti ti-chevron-down"></i>';menu.querySelectorAll('button').forEach(button=>button.classList.toggle('selected',button.dataset.value===select.value));};
+    Array.from(select.options).forEach(option=>{const item=document.createElement('button');item.type='button';item.dataset.value=option.value;item.textContent=option.text;item.disabled=option.disabled;item.addEventListener('click',()=>{select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));sync();wrap.classList.remove('open');});menu.appendChild(item);});
+    trigger.addEventListener('click',()=>{document.querySelectorAll('.custom-select.open').forEach(item=>{if(item!==wrap)item.classList.remove('open');});wrap.classList.toggle('open');});
+    select.addEventListener('change',sync);sync();
+  });
+}
+document.addEventListener('click',event=>{if(!event.target.closest('.custom-select'))document.querySelectorAll('.custom-select.open').forEach(item=>item.classList.remove('open'));});
 
 function showAlert(msg,type='success'){
   alertMsg={msg,type};showTab(activeTab);
@@ -86,6 +131,9 @@ function showAlert(msg,type='success'){
 function alertHTML(){
   if(!alertMsg)return '';
   return '<div class="alert alert-'+alertMsg.type+'"><i class="ti ti-'+(alertMsg.type==='success'?'check':'alert-circle')+'"></i>'+escapeHTML(alertMsg.msg)+'</div>';
+}
+function pageHero(icon,eyebrow,title,description,badge=''){
+  return '<div class="report-hero page-hero"><div><p class="report-eyebrow"><i class="ti '+icon+'"></i> '+escapeHTML(eyebrow)+'</p><h2>'+escapeHTML(title)+'</h2><p>'+escapeHTML(description)+'</p></div>'+(badge?'<span class="report-period">'+escapeHTML(badge)+'</span>':'')+'</div>';
 }
 
 let _saving=false;
@@ -134,8 +182,7 @@ function renderVisaoGeral(c){
     return 'background:#FAECE7;color:#993C1D';
   }
 
-  c.innerHTML=alertHTML()+
-    '<p class="overview-title">Vis\u00e3o geral</p>'+
+  c.innerHTML=alertHTML()+'<section class="overview-panel">'+pageHero('ti-layout-dashboard','Painel operacional','Visão geral','Acompanhe a frota, rotas e atividades recentes.','Hoje')+
     '<div class="stat-grid-ov">'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'motoristas\')" title="Ver motoristas"><div class="stat-icon ic-blue"><i class="ti ti-users"></i></div><p class="stat-num-ov">'+activeDrivers+'</p><p class="stat-label-ov">Motoristas ativos</p></button>'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'viagem\')" title="Ver viagens em aberto"><div class="stat-icon ic-amber"><i class="ti ti-clock"></i></div><p class="stat-num-ov">'+openTrips+'</p><p class="stat-label-ov">Viagens em aberto</p></button>'+
@@ -143,7 +190,7 @@ function renderVisaoGeral(c){
       '<button class="stat-card-ov stat-action" onclick="showTab(\'registros\')" title="Ver quilometragem"><div class="stat-icon ic-blue"><i class="ti ti-gauge"></i></div><p class="stat-num-ov">'+monthKm+'</p><p class="stat-label-ov">Km rodados no m\u00eas</p></button>'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">'+monthIncidents+'</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>'+
       '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">'+openBlocks+'</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>'+
-    '</div>'+
+    '</div></section>'+
     '<div class="activity-card">'+
       '<p class="activity-title">Atividades recentes</p>'+
       (feed.length===0?'<div class="empty"><i class="ti ti-map-off"></i>Nenhuma atividade registrada ainda</div>':
@@ -179,26 +226,44 @@ function closeModal(){document.getElementById('modal-container').innerHTML='';}
 function renderViagem(c){
   const drivers=DB.drivers().filter(d=>d.status==='ativo');
   const openTrips=DB.trips().filter(t=>!t.endTime);
-  c.innerHTML=alertHTML()+
-    (openTrips.length?'<div class="card"><div class="card-title"><i class="ti ti-clock"></i> Viagem em aberto</div>'+
-      openTrips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+escapeHTML(t.destination||'-')+'</span><span><i class="ti ti-clock"></i>'+fmt(t.startTime)+'</span></div></div><span class="tag tag-open">Em aberto</span></div><div class="actions"><button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Registrar chegada</button></div></div>').join('')+
+  c.innerHTML=alertHTML()+pageHero('ti-route','Operação externa','Nova rota','Registre a saída para um novo atendimento.','Rotas')+
+    (openTrips.length?'<div class="card"><div class="card-title"><i class="ti ti-progress-check"></i> Atendimento em andamento</div>'+
+      openTrips.map(t=>'<div class="trip-row clickable-card" role="button" tabindex="0" onclick="confirmFinishRoute('+t.id+')"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-building"></i>'+escapeHTML(t.destination||'-')+'</span><span><i class="ti ti-clock"></i>'+fmt(t.startTime)+'</span></div></div><span class="tag tag-open">Em atendimento</span></div><p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para finalizar esta rota</p></div>').join('')+
       '</div>':'')+
-    '<div class="card"><div class="card-title"><i class="ti ti-map-pin"></i> Registrar sa\u00edda</div>'+
+    '<div class="card"><div class="card-title"><i class="ti ti-route"></i> Nova rota</div>'+
     '<div class="field"><label>Motorista</label><select id="v-driver"><option value="">Selecione o motorista...</option>'+
       drivers.map(d=>'<option value="'+d.id+'">'+escapeHTML(d.name)+'</option>').join('')+
     '</select></div>'+
     '<div class="row"><div class="field"><label>Ve\u00edculo</label><select id="v-vehicle" onchange="updateVehicleAvailability()"><option value="FIORINO">FIORINO</option><option value="STRADA">STRADA</option></select><p id="vehicle-availability" class="vehicle-status"></p></div>'+
-    '<div class="field"><label>N\u00ba OS (Printwayy)</label><input type="text" id="v-os" placeholder="Ex: OS-2024-001"></div></div>'+
+    '<div class="field"><label>OS / chamado</label><input type="text" id="v-os" placeholder="Ex: OS-2024-001"></div></div>'+
     '<div class="row"><div class="field"><label>Data de sa\u00edda</label><input type="date" id="v-date" value="'+new Date().toISOString().split('T')[0]+'"></div>'+
     '<div class="field"><label>Hor\u00e1rio de sa\u00edda</label><input type="time" id="v-time" value="'+new Date().toTimeString().slice(0,5)+'"></div></div>'+
-    '<div class="field"><label>Destino</label><input type="text" id="v-dest" placeholder="Cidade / empresa de destino"></div>'+
+    '<div class="row"><div class="field"><label>Cliente</label><input type="text" id="v-client" placeholder="Nome do cliente"></div><div class="field"><label>Local do atendimento</label><input type="text" id="v-dest" placeholder="Endereço, cidade ou unidade"></div></div>'+
     '<div class="field"><label>KM de sa\u00edda</label><input type="number" id="v-km-start" min="0" placeholder="Ex: 45230"><p id="vehicle-last-km" class="vehicle-status"></p></div>'+
     '<div class="field"><label>Foto do painel (KM de sa\u00edda)</label>'+
     '<div class="photo-area" onclick="document.getElementById(\'v-photo-start\').click()"><i class="ti ti-camera" style="font-size:26px;display:block;margin-bottom:6px"></i>Toque para tirar foto do painel<input type="file" id="v-photo-start" accept="image/*" capture="environment" style="display:none" onchange="previewPhoto(this,\'prev-start\')"></div>'+
     '<img id="prev-start" class="photo-preview" style="display:none"></div>'+
-    '<div class="field"><label>Observa\u00e7\u00f5es</label><textarea id="v-obs" placeholder="Estado do ve\u00edculo, observa\u00e7\u00f5es iniciais..."></textarea></div>'+
-    '<button class="btn btn-primary" id="start-trip-button" style="width:100%" onclick="startTrip(this)"><i class="ti ti-map-pin"></i> Registrar sa\u00edda</button></div>';
+    '<div class="field"><label>Detalhes do atendimento</label><textarea id="v-obs" placeholder="Serviço previsto, equipamentos envolvidos ou observações iniciais..."></textarea></div>'+
+    '<button class="btn btn-primary btn-operation-start" id="start-trip-button" style="width:100%" onclick="startTrip(this)"><i class="ti ti-player-play"></i> Iniciar deslocamento para o atendimento</button></div>';
+  renderAttendanceTimer(c,openTrips);
   updateVehicleAvailability();
+}
+
+let attendanceTimerInterval=null;
+function formatElapsedTime(startTime){
+  const minutes=Math.max(0,Math.floor((Date.now()-new Date(startTime).getTime())/60000));
+  const days=Math.floor(minutes/1440),hours=Math.floor((minutes%1440)/60),mins=minutes%60;
+  return (days?days+'d ':'')+(hours?hours+'h ':'')+mins+'min';
+}
+function renderAttendanceTimer(container,trips){
+  if(attendanceTimerInterval){clearInterval(attendanceTimerInterval);attendanceTimerInterval=null;}
+  if(!trips.length)return;
+  const title=[...container.querySelectorAll('.card-title')].find(item=>item.textContent.toLowerCase().includes('atendimento em andamento'));
+  if(!title)return;
+  const oldest=[...trips].sort((a,b)=>new Date(a.startTime)-new Date(b.startTime))[0];
+  title.insertAdjacentHTML('afterend','<div class="attendance-timer"><span class="attendance-timer-dot"></span><span>Em atendimento há</span><strong id="attendance-elapsed"></strong>'+(trips.length>1?'<small>'+trips.length+' rotas abertas</small>':'')+'</div>');
+  const update=()=>{const target=document.getElementById('attendance-elapsed');if(target)target.textContent=formatElapsedTime(oldest.startTime);else clearInterval(attendanceTimerInterval);};
+  update();attendanceTimerInterval=setInterval(update,60000);
 }
 
 function updateVehicleAvailability(){
@@ -227,18 +292,23 @@ async function startTrip(btn){
   if(availability){showAlert(availability,'error');updateVehicleAvailability();return;}
   const date=document.getElementById('v-date').value,time=document.getElementById('v-time').value;
   const photo=document.getElementById('prev-start');
-  const trip={id:genId(),driverId:parseInt(driverId),driverName:driver.name,vehicle,os:document.getElementById('v-os').value.trim(),destination:document.getElementById('v-dest').value.trim(),startTime:new Date(date+'T'+time).toISOString(),endTime:null,kmStart:document.getElementById('v-km-start').value,kmEnd:null,photoStart:photo&&photo.style.display!=='none'?photo.src:null,photoEnd:null,obsStart:document.getElementById('v-obs').value.trim(),obsEnd:'',status:'open'};
+  const trip={id:genId(),driverId:parseInt(driverId),driverName:driver.name,vehicle,os:document.getElementById('v-os').value.trim(),client:document.getElementById('v-client').value.trim(),destination:document.getElementById('v-dest').value.trim(),startTime:new Date(date+'T'+time).toISOString(),endTime:null,kmStart:document.getElementById('v-km-start').value,kmEnd:null,photoStart:photo&&photo.style.display!=='none'?photo.src:null,photoEnd:null,obsStart:document.getElementById('v-obs').value.trim(),obsEnd:'',status:'open'};
   _saving=true;setBusy(btn,true,'<i class="ti ti-loader"></i> Salvando...');
   let ok=true;
   try{const trips=DB.trips();trips.push(trip);DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao registrar sa\u00edda:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  if(ok){showAlert('Sa\u00edda registrada com sucesso!');}else{showAlert('Salvo no aparelho, mas falhou no servidor.','error');}
+  if(ok){showAlert('Rota iniciada com sucesso!');}else{showAlert('Salvo no aparelho, mas falhou no servidor.','error');}
 }
 
 function openArrival(tripId){
   const trip=DB.trips().find(t=>t.id===tripId);if(!trip)return;
-  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Registrar chegada<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div style="font-size:13px;color:#666;margin-bottom:14px;padding:8px 12px;background:#f5f5f0;border-radius:8px"><strong>'+trip.driverName+'</strong> \u2014 '+trip.vehicle+' \u2014 saiu \u00e0s '+fmtTime(trip.startTime)+'</div><div class="row"><div class="field"><label>Data de chegada</label><input type="date" id="arr-date" value="'+new Date().toISOString().split('T')[0]+'"></div><div class="field"><label>Hor\u00e1rio de chegada</label><input type="time" id="arr-time" value="'+new Date().toTimeString().slice(0,5)+'"></div></div><div class="field"><label>KM de chegada</label><input type="number" id="arr-km" placeholder="Ex: 45510"></div><div class="field"><label>Foto do painel (KM de chegada)</label><div class="photo-area" onclick="document.getElementById(\'arr-photo\').click()"><i class="ti ti-camera" style="font-size:24px;display:block;margin-bottom:5px"></i>Foto do painel na chegada<input type="file" id="arr-photo" accept="image/*" capture="environment" style="display:none" onchange="previewPhoto(this,\'arr-prev\')"></div><img id="arr-prev" class="photo-preview" style="display:none"></div><div class="field"><label>Observa\u00e7\u00f5es de chegada</label><textarea id="arr-obs" placeholder="Estado do ve\u00edculo, ocorr\u00eancias..."></textarea></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary" style="flex:1" onclick="closeTrip('+tripId+', this)"><i class="ti ti-check"></i> Confirmar chegada</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Finalizar atendimento<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>'+escapeHTML(trip.driverName)+'</strong> · '+escapeHTML(vehicleLabel(trip.vehicle))+'<div class="trip-meta"><span><i class="ti ti-hash"></i>OS: '+escapeHTML(trip.os||'Não informada')+'</span><span><i class="ti ti-user"></i>Cliente: '+escapeHTML(trip.client||'Não informado')+'</span><span><i class="ti ti-building"></i>Local: '+escapeHTML(trip.destination||'Não informado')+'</span><span><i class="ti ti-clock"></i>Saída: '+fmtTime(trip.startTime)+'</span></div></div><div class="row"><div class="field"><label>Data de retorno</label><input type="date" id="arr-date" value="'+new Date().toISOString().split('T')[0]+'"></div><div class="field"><label>Horário de retorno</label><input type="time" id="arr-time" value="'+new Date().toTimeString().slice(0,5)+'"></div></div><div class="field"><label>KM no retorno</label><input type="number" id="arr-km" placeholder="Ex: 45510"></div><div class="field"><label>Foto do painel no retorno</label><div class="photo-area" onclick="document.getElementById(\'arr-photo\').click()"><i class="ti ti-camera" style="font-size:24px;display:block;margin-bottom:5px"></i>Toque para fotografar o painel<input type="file" id="arr-photo" accept="image/*" capture="environment" style="display:none" onchange="previewPhoto(this,\'arr-prev\')"></div><img id="arr-prev" class="photo-preview" style="display:none"></div><div class="field"><label>Resumo do atendimento realizado</label><textarea id="arr-obs" placeholder="Serviço realizado, impressoras atendidas e qualquer ocorrência..."></textarea></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-operation-start" style="flex:1" onclick="closeTrip('+tripId+', this)"><i class="ti ti-circle-check"></i> Concluir atendimento e registrar retorno</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
+}
+
+function confirmFinishRoute(tripId){
+  const trip=DB.trips().find(t=>t.id===tripId);if(!trip)return;
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal confirm-modal"><div class="modal-title">Finalizar rota<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="confirm-icon"><i class="ti ti-route-2"></i></div><h3>Deseja finalizar esta rota?</h3><p>'+escapeHTML(trip.client||trip.destination||'Atendimento em andamento')+'</p><p class="confirm-helper">Você ainda preencherá a data, horário, KM, foto do painel e resumo do atendimento antes de concluir.</p><div class="confirm-actions"><button class="btn btn-primary" onclick="openArrival('+tripId+')"><i class="ti ti-arrow-right"></i> Sim, preencher retorno</button><button class="btn btn-secondary" onclick="closeModal()">Não, voltar</button></div></div></div>';
 }
 
 async function closeTrip(tripId,btn){
@@ -252,7 +322,7 @@ async function closeTrip(tripId,btn){
   try{DB.save('trips',trips);if(USE_SUPABASE){ok=await DB.saveOne('trips',trip);}}
   catch(err){console.error('Erro ao registrar chegada:',err);ok=false;}
   finally{_saving=false;setBusy(btn,false);}
-  closeModal();showAlert(ok?'Chegada registrada com sucesso!':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
+  closeModal();showAlert(ok?'Rota finalizada com sucesso!':'Salvo no aparelho, mas falhou no servidor.',ok?'success':'error');
 }
 
 function inputDateTime(value){
@@ -261,17 +331,19 @@ function inputDateTime(value){
   return {date:d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),time:pad(d.getHours())+':'+pad(d.getMinutes())};
 }
 function editTrip(tripId){
+  if(!adminOnly())return;
   const trip=DB.trips().find(t=>t.id===tripId);if(!trip)return;
   const start=inputDateTime(trip.startTime),end=inputDateTime(trip.endTime);
   const driverOptions=DB.drivers().map(driver=>'<option value="'+driver.id+'" '+(driver.id===trip.driverId?'selected':'')+'>'+escapeHTML(driver.name)+'</option>').join('');
-  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide"><div class="modal-title">Editar registro<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="fine-note">Toda alteração exige um motivo e ficará registrada no histórico.</p><div class="row"><div class="field"><label>Motorista</label><select id="e-driver">'+driverOptions+'</select></div><div class="field"><label>Veículo</label><select id="e-vehicle"><option value="FIORINO" '+(trip.vehicle==='FIORINO'?'selected':'')+'>FIORINO</option><option value="STRADA" '+(trip.vehicle==='STRADA'?'selected':'')+'>STRADA</option></select></div></div><div class="row"><div class="field"><label>Data de saída</label><input type="date" id="e-date" value="'+start.date+'"></div><div class="field"><label>Hora de saída</label><input type="time" id="e-time" value="'+start.time+'"></div></div><div class="row"><div class="field"><label>Data de chegada</label><input type="date" id="e-end-date" value="'+end.date+'"></div><div class="field"><label>Hora de chegada</label><input type="time" id="e-end-time" value="'+end.time+'"></div></div><div class="row"><div class="field"><label>KM de saída</label><input type="number" id="e-km" min="0" value="'+escapeHTML(trip.kmStart||'')+'"></div><div class="field"><label>KM de chegada</label><input type="number" id="e-end-km" min="0" value="'+escapeHTML(trip.kmEnd||'')+'"></div></div><div class="field"><label>Destino</label><input type="text" id="e-dest" value="'+escapeHTML(trip.destination||'')+'"></div><div class="field"><label>Nº OS</label><input type="text" id="e-os" value="'+escapeHTML(trip.os||'')+'"></div><div class="field"><label>Observações de saída</label><textarea id="e-obs">'+escapeHTML(trip.obsStart||'')+'</textarea></div><div class="field"><label>Observações de chegada</label><textarea id="e-end-obs">'+escapeHTML(trip.obsEnd||'')+'</textarea></div><div class="field"><label>Motivo da alteração *</label><textarea id="e-reason" maxlength="500" placeholder="Explique o que foi corrigido e por quê."></textarea></div><div style="display:flex;gap:8px"><button class="btn btn-primary" style="flex:1" onclick="saveEdit('+tripId+', this)"><i class="ti ti-check"></i> Salvar alteração</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide"><div class="modal-title">Editar registro<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="fine-note">Toda alteração exige um motivo e ficará registrada no histórico.</p><div class="row"><div class="field"><label>Motorista</label><select id="e-driver">'+driverOptions+'</select></div><div class="field"><label>Veículo</label><select id="e-vehicle"><option value="FIORINO" '+(trip.vehicle==='FIORINO'?'selected':'')+'>FIORINO</option><option value="STRADA" '+(trip.vehicle==='STRADA'?'selected':'')+'>STRADA</option></select></div></div><div class="row"><div class="field"><label>Data de saída</label><input type="date" id="e-date" value="'+start.date+'"></div><div class="field"><label>Hora de saída</label><input type="time" id="e-time" value="'+start.time+'"></div></div><div class="row"><div class="field"><label>Data de chegada</label><input type="date" id="e-end-date" value="'+end.date+'"></div><div class="field"><label>Hora de chegada</label><input type="time" id="e-end-time" value="'+end.time+'"></div></div><div class="row"><div class="field"><label>KM de saída</label><input type="number" id="e-km" min="0" value="'+escapeHTML(trip.kmStart||'')+'"></div><div class="field"><label>KM de chegada</label><input type="number" id="e-end-km" min="0" value="'+escapeHTML(trip.kmEnd||'')+'"></div></div><div class="row"><div class="field"><label>Cliente</label><input type="text" id="e-client" value="'+escapeHTML(trip.client||'')+'"></div><div class="field"><label>Local do atendimento</label><input type="text" id="e-dest" value="'+escapeHTML(trip.destination||'')+'"></div></div><div class="field"><label>Nº OS</label><input type="text" id="e-os" value="'+escapeHTML(trip.os||'')+'"></div><div class="field"><label>Observações de saída</label><textarea id="e-obs">'+escapeHTML(trip.obsStart||'')+'</textarea></div><div class="field"><label>Observações de chegada</label><textarea id="e-end-obs">'+escapeHTML(trip.obsEnd||'')+'</textarea></div><div class="field"><label>Motivo da alteração *</label><textarea id="e-reason" maxlength="500" placeholder="Explique o que foi corrigido e por quê."></textarea></div><div style="display:flex;gap:8px"><button class="btn btn-primary" style="flex:1" onclick="saveEdit('+tripId+', this)"><i class="ti ti-check"></i> Salvar alteração</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
 }
 
 function changedTripFields(before,after){
-  const labels={driverId:'motorista',vehicle:'veículo',startTime:'data/hora de saída',endTime:'data/hora de chegada',kmStart:'KM de saída',kmEnd:'KM de chegada',destination:'destino',os:'número da OS',obsStart:'observações de saída',obsEnd:'observações de chegada'};
+  const labels={driverId:'motorista',vehicle:'veículo',startTime:'data/hora de saída',endTime:'data/hora de chegada',kmStart:'KM de saída',kmEnd:'KM de chegada',client:'cliente',destination:'local do atendimento',os:'número da OS',obsStart:'observações de saída',obsEnd:'observações de chegada'};
   return Object.keys(labels).filter(key=>String(before[key]??'')!==String(after[key]??'')).map(key=>labels[key]);
 }
 async function saveEdit(tripId,btn){
+  if(!adminOnly())return;
   if(_saving)return;
   const trips=DB.trips(),trip=trips.find(t=>t.id===tripId);if(!trip)return;
   const reason=document.getElementById('e-reason').value.trim();
@@ -280,7 +352,7 @@ async function saveEdit(tripId,btn){
   const startDate=document.getElementById('e-date').value,startTime=document.getElementById('e-time').value,endDate=document.getElementById('e-end-date').value,endTime=document.getElementById('e-end-time').value;
   if(!driver||!startDate||!startTime){showAlert('Preencha motorista, data e hora de saída.','error');return;}
   if(Boolean(endDate)!==Boolean(endTime)){showAlert('Preencha data e hora de chegada juntas, ou deixe ambas vazias.','error');return;}
-  const updated={...trip,driverId:driver.id,driverName:driver.name,vehicle:document.getElementById('e-vehicle').value,startTime:new Date(startDate+'T'+startTime).toISOString(),endTime:endDate?new Date(endDate+'T'+endTime).toISOString():null,kmStart:document.getElementById('e-km').value,kmEnd:document.getElementById('e-end-km').value,destination:document.getElementById('e-dest').value.trim(),os:document.getElementById('e-os').value.trim(),obsStart:document.getElementById('e-obs').value.trim(),obsEnd:document.getElementById('e-end-obs').value.trim(),status:endDate?'closed':'open'};
+  const updated={...trip,driverId:driver.id,driverName:driver.name,vehicle:document.getElementById('e-vehicle').value,startTime:new Date(startDate+'T'+startTime).toISOString(),endTime:endDate?new Date(endDate+'T'+endTime).toISOString():null,kmStart:document.getElementById('e-km').value,kmEnd:document.getElementById('e-end-km').value,client:document.getElementById('e-client').value.trim(),destination:document.getElementById('e-dest').value.trim(),os:document.getElementById('e-os').value.trim(),obsStart:document.getElementById('e-obs').value.trim(),obsEnd:document.getElementById('e-end-obs').value.trim(),status:endDate?'closed':'open'};
   if(updated.endTime&&new Date(updated.endTime)<new Date(updated.startTime)){showAlert('A chegada não pode ocorrer antes da saída.','error');return;}
   if(updated.kmStart&&updated.kmEnd&&Number(updated.kmEnd)<Number(updated.kmStart)){showAlert('O KM de chegada não pode ser menor que o KM de saída.','error');return;}
   const fields=changedTripFields(trip,updated);
@@ -305,7 +377,7 @@ function renderRegistros(c){
   if(filterDate)trips=trips.filter(t=>t.startTime.startsWith(filterDate));
   if(filterDriver)trips=trips.filter(t=>t.driverId==filterDriver);
   const km=trips.reduce((s,t)=>{if(t.kmStart&&t.kmEnd)return s+(parseInt(t.kmEnd)-parseInt(t.kmStart));return s;},0);
-  c.innerHTML=alertHTML()+
+  c.innerHTML=alertHTML()+pageHero('ti-list','Histórico operacional','Registros','Consulte as rotas realizadas e em andamento.',trips.length+' rotas')+
     '<div class="card"><div class="card-title"><i class="ti ti-search"></i> Buscar registros</div>'+
     '<div class="row"><div class="field"><label>Data</label><input type="date" id="filter-date" value="'+filterDate+'" onchange="filterRegistros()"></div>'+
     '<div class="field"><label>Motorista</label><select id="filter-driver-val" onchange="filterRegistros()"><option value="">Todos</option>'+
@@ -315,7 +387,13 @@ function renderRegistros(c){
     '</div>'+
     '<div class="stat-grid"><div class="stat"><div class="stat-num">'+trips.length+'</div><div class="stat-label">Viagens</div></div><div class="stat"><div class="stat-num">'+trips.filter(t=>t.status==='open').length+'</div><div class="stat-label">Em aberto</div></div><div class="stat"><div class="stat-num">'+km+'</div><div class="stat-label">KM total</div></div></div>'+
     (trips.length===0?'<div class="empty"><i class="ti ti-map-off"></i>Nenhum registro encontrado</div>':'')+
-    trips.map(t=>'<div class="trip-row"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-calendar"></i>'+fmtDate(t.startTime)+'</span><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-map-pin"></i>'+escapeHTML(t.destination||'-')+'</span>'+(t.kmStart?'<span><i class="ti ti-road"></i>'+t.kmStart+' \u2192 '+(t.kmEnd||'?')+' km</span>':'')+'</div><div class="trip-meta" style="margin-top:4px"><span><i class="ti ti-clock"></i>Sa\u00edda: '+fmt(t.startTime)+'</span>'+(t.endTime?'<span><i class="ti ti-flag"></i>Chegada: '+fmt(t.endTime)+'</span>':'')+'</div>'+(t.obsStart?'<div style="font-size:12px;color:#666;margin-top:5px;padding:5px 8px;background:#f8f8f5;border-radius:6px">'+escapeHTML(t.obsStart)+'</div>':'')+'</div><span class="tag '+(t.status==='open'?'tag-open':'tag-closed')+'">'+(t.status==='open'?'Em aberto':'Conclu\u00edda')+'</span></div><div class="actions">'+(t.status==='open'?'<button class="btn btn-success btn-sm" onclick="openArrival('+t.id+')"><i class="ti ti-flag"></i> Chegada</button>':'')+(t.photoStart||t.photoEnd?'<button class="btn btn-secondary btn-sm" onclick="viewPhotos('+t.id+')"><i class="ti ti-photo"></i> Fotos</button>':'')+(t.changeLog?.length?'<button class="btn btn-secondary btn-sm" onclick="viewTripHistory('+t.id+')"><i class="ti ti-history"></i> Histórico</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="editTrip('+t.id+')"><i class="ti ti-edit"></i></button></div></div>').join('');
+    trips.map(t=>'<div class="trip-row clickable-card" role="button" tabindex="0" onclick="viewTrip('+t.id+')"><div class="trip-header"><div><div class="trip-name">'+escapeHTML(t.driverName)+'</div><div class="trip-meta"><span><i class="ti ti-calendar"></i>'+fmtDate(t.startTime)+'</span><span><i class="ti ti-car"></i>'+vehicleLabel(t.vehicle)+'</span><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'-')+'</span><span><i class="ti ti-user"></i>'+escapeHTML(t.client||'Cliente não informado')+'</span><span><i class="ti ti-map-pin"></i>'+escapeHTML(t.destination||'-')+'</span>'+(t.kmStart?'<span><i class="ti ti-road"></i>'+t.kmStart+' → '+(t.kmEnd||'?')+' km</span>':'')+'</div><div class="trip-meta" style="margin-top:4px"><span><i class="ti ti-clock"></i>Saída: '+fmt(t.startTime)+'</span>'+(t.endTime?'<span><i class="ti ti-flag"></i>Chegada: '+fmt(t.endTime)+'</span>':'')+'</div></div><span class="tag '+(t.status==='open'?'tag-open':'tag-closed')+'">'+(t.status==='open'?'Em atendimento':'Concluída')+'</span></div><p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para ver os detalhes</p></div>').join('');
+}
+
+function viewTrip(tripId){
+  const t=DB.trips().find(item=>item.id===tripId);if(!t)return;
+  const actions=(t.status==='open'?'<button class="btn btn-primary" onclick="confirmFinishRoute('+t.id+')"><i class="ti ti-circle-check"></i> Finalizar rota</button>':'')+(isAdmin()?'<button class="btn btn-secondary" onclick="editTrip('+t.id+')"><i class="ti ti-edit"></i> Editar registro</button><button class="btn btn-danger" onclick="deleteTrip('+t.id+')"><i class="ti ti-trash"></i> Excluir registro</button>':'')+(t.photoStart||t.photoEnd?'<button class="btn btn-secondary" onclick="viewPhotos('+t.id+')"><i class="ti ti-photo"></i> Ver fotos</button>':'')+(t.changeLog?.length?'<button class="btn btn-secondary" onclick="viewTripHistory('+t.id+')"><i class="ti ti-history"></i> Histórico</button>':'');
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Detalhes da rota<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>'+escapeHTML(t.client||'Cliente não informado')+'</strong><div class="trip-meta"><span><i class="ti ti-hash"></i>OS: '+escapeHTML(t.os||'Não informada')+'</span><span><i class="ti ti-map-pin"></i>Local: '+escapeHTML(t.destination||'Não informado')+'</span><span><i class="ti ti-car"></i>'+escapeHTML(vehicleLabel(t.vehicle))+'</span><span><i class="ti ti-road"></i>'+escapeHTML(t.kmStart||'-')+' → '+escapeHTML(t.kmEnd||'-')+' km</span></div></div><div class="confirm-actions">'+actions+'</div></div></div>';
 }
 
 function viewTripHistory(tripId){
@@ -324,6 +402,7 @@ function viewTripHistory(tripId){
 }
 
 async function deleteTrip(id){
+  if(!adminOnly())return;
   if(!confirm('Excluir este registro permanentemente?'))return;
   const trips=DB.trips().filter(t=>t.id!==id);DB.save('trips',trips);
   if(USE_SUPABASE){await DB.removeOne('trips',id);}
@@ -332,21 +411,32 @@ async function deleteTrip(id){
 
 function viewPhotos(tripId){
   const t=DB.trips().find(x=>x.id===tripId);if(!t)return;
-  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Fotos da viagem <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div>'+(t.photoStart?'<div style="margin-bottom:14px"><div style="font-size:12px;color:#666;margin-bottom:4px;font-weight:600">KM de sa\u00edda</div><img src="'+t.photoStart+'" style="width:100%;border-radius:8px"></div>':'')+(t.photoEnd?'<div><div style="font-size:12px;color:#666;margin-bottom:4px;font-weight:600">KM de chegada</div><img src="'+t.photoEnd+'" style="width:100%;border-radius:8px"></div>':'<p style="font-size:13px;color:#888">Sem foto de chegada.</p>')+'</div></div>';
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide photo-modal"><div class="modal-title"><span><i class="ti ti-photo"></i> Fotos da rota</span><button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="photo-modal-subtitle">'+escapeHTML(t.client||t.destination||'Registro da rota')+' · '+fmtDate(t.startTime)+'</p><div class="photo-gallery">'+(t.photoStart?'<figure class="photo-card"><figcaption><span><i class="ti ti-login"></i> Saída</span><strong>KM '+escapeHTML(t.kmStart||'—')+'</strong></figcaption><img src="'+t.photoStart+'" alt="Painel na saída" onclick="openPhotoPreview(this.src,\'Painel na saída\')"><p>Toque na foto para ampliar</p></figure>':'<div class="photo-card photo-missing"><i class="ti ti-camera-off"></i><span>Foto de saída não registrada</span></div>')+(t.photoEnd?'<figure class="photo-card"><figcaption><span><i class="ti ti-logout"></i> Retorno</span><strong>KM '+escapeHTML(t.kmEnd||'—')+'</strong></figcaption><img src="'+t.photoEnd+'" alt="Painel no retorno" onclick="openPhotoPreview(this.src,\'Painel no retorno\')"><p>Toque na foto para ampliar</p></figure>':'<div class="photo-card photo-missing"><i class="ti ti-camera-off"></i><span>Foto de retorno não registrada</span></div>')+'</div></div></div>';
+}
+
+function openPhotoPreview(src,label){
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg photo-lightbox" onclick="if(event.target===this)closeModal()"><button class="close-btn photo-close" onclick="closeModal()"><i class="ti ti-x"></i></button><img src="'+src+'" alt="'+escapeHTML(label)+'"><span>'+escapeHTML(label)+'</span></div>';
 }
 
 // ─── MOTORISTAS ──────────────────────────────────────────────────────────────
 function renderMotoristas(c){
   const drivers=DB.drivers(),trips=DB.trips();
-  c.innerHTML=alertHTML()+
-    '<div class="section-header"><span class="section-title">Motoristas cadastrados</span><button class="btn btn-primary btn-sm" onclick="openAddDriver()"><i class="ti ti-plus"></i> Novo</button></div>'+
+  c.innerHTML=alertHTML()+pageHero('ti-users','Equipe externa','Motoristas','Acompanhe os profissionais cadastrados.',drivers.length+' membros')+
+    (isAdmin()?'<div class="section-header section-actions-only"><button class="btn btn-primary btn-sm" onclick="openAddDriver()"><i class="ti ti-plus"></i> Novo motorista</button></div>':'')+
     drivers.map(d=>{
       const dtrips=trips.filter(t=>t.driverId===d.id),km=calcKm(dtrips);
-      return '<div class="driver-card"><div class="avatar">'+initials(d.name)+'</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">'+d.name+'</div><div style="font-size:12px;color:#666;margin-top:2px">CNH: '+(d.cnh||'-')+' \u2022 '+(d.phone||'sem telefone')+'</div><div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap"><span class="badge"><i class="ti ti-map-pin"></i> '+dtrips.length+' viagens</span><span class="badge"><i class="ti ti-road"></i> '+km+' km</span><span class="badge" style="background:'+(d.status==='ativo'?'#EAF3DE':'#FCEBEB')+';color:'+(d.status==='ativo'?'#3B6D11':'#A32D2D')+'">'+d.status+'</span></div></div><div style="display:flex;gap:4px;flex-shrink:0"><button class="btn btn-secondary btn-sm" onclick="editDriver('+d.id+')" title="Editar"><i class="ti ti-edit"></i></button><button class="btn btn-danger btn-sm" onclick="toggleDriver('+d.id+')" title="'+(d.status==='ativo'?'Desativar':'Ativar')+'">'+(d.status==='ativo'?'<i class="ti ti-user-off"></i>':'<i class="ti ti-user-check"></i>')+'</button></div></div>';
+      return '<div class="driver-card clickable-card" role="button" tabindex="0" onclick="viewDriver('+d.id+')"><div class="avatar">'+initials(d.name)+'</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">'+escapeHTML(d.name)+'</div><div style="font-size:12px;color:#666;margin-top:2px">CNH: '+escapeHTML(d.cnh||'-')+' · '+escapeHTML(d.phone||'sem telefone')+'</div><div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap"><span class="badge"><i class="ti ti-map-pin"></i> '+dtrips.length+' rotas</span><span class="badge"><i class="ti ti-road"></i> '+km+' km</span><span class="badge" style="background:'+(d.status==='ativo'?'#EAF3DE':'#FCEBEB')+';color:'+(d.status==='ativo'?'#3B6D11':'#A32D2D')+'">'+escapeHTML(d.status)+'</span></div></div><i class="ti ti-chevron-right" style="color:var(--text-muted)"></i></div>';
     }).join('');
 }
 
+function viewDriver(id){
+  const d=DB.drivers().find(item=>item.id===id);if(!d)return;
+  const dtrips=DB.trips().filter(item=>item.driverId===d.id),km=calcKm(dtrips);
+  document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Motorista<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="driver-profile"><div class="avatar">'+initials(d.name)+'</div><div><strong>'+escapeHTML(d.name)+'</strong><p>CNH: '+escapeHTML(d.cnh||'Não informada')+'<br>Telefone: '+escapeHTML(d.phone||'Não informado')+'<br>E-mail: '+escapeHTML(d.email||'Não informado')+'</p></div></div><div class="report-metrics"><div><strong>'+dtrips.length+'</strong><span>Rotas</span></div><div><strong>'+km+' km</strong><span>Percorridos</span></div></div><div class="confirm-actions"><button class="btn btn-primary" onclick="editDriver('+d.id+')"><i class="ti ti-edit"></i> Editar motorista</button><button class="btn btn-secondary" onclick="toggleDriver('+d.id+');closeModal()"><i class="ti '+(d.status==='ativo'?'ti-user-off':'ti-user-check')+'"></i> '+(d.status==='ativo'?'Desativar':'Ativar')+'</button></div></div></div>';
+}
+
 function openAddDriver(){
+  if(!adminOnly())return;
   document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Novo motorista <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="field"><label>Nome completo *</label><input type="text" id="nd-name" placeholder="Nome do motorista"></div><div class="row"><div class="field"><label>CNH</label><input type="text" id="nd-cnh" placeholder="N\u00famero da CNH"></div><div class="field"><label>Telefone</label><input type="tel" id="nd-phone" placeholder="(31) 9 xxxxxx"></div></div><div class="field"><label>E-mail</label><input type="email" id="nd-email" placeholder="email@exemplo.com"></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addDriver(this)"><i class="ti ti-plus"></i> Cadastrar</button></div></div>';
 }
 
@@ -364,11 +454,13 @@ async function addDriver(btn){
 }
 
 function editDriver(id){
+  if(!adminOnly())return;
   const d=DB.drivers().find(x=>x.id===id);if(!d)return;
   document.getElementById('modal-container').innerHTML='<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Editar motorista <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="field"><label>Nome completo</label><input type="text" id="ed-name" value="'+d.name+'"></div><div class="row"><div class="field"><label>CNH</label><input type="text" id="ed-cnh" value="'+(d.cnh||'')+'"></div><div class="field"><label>Telefone</label><input type="tel" id="ed-phone" value="'+(d.phone||'')+'"></div></div><div class="field"><label>E-mail</label><input type="email" id="ed-email" value="'+(d.email||'')+'"></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveDriver('+id+', this)"><i class="ti ti-check"></i> Salvar</button></div></div>';
 }
 
 async function saveDriver(id,btn){
+  if(!adminOnly())return;
   if(_saving)return;
   const drivers=DB.drivers(),d=drivers.find(x=>x.id===id);
   d.name=document.getElementById('ed-name').value;d.cnh=document.getElementById('ed-cnh').value;d.phone=document.getElementById('ed-phone').value;d.email=document.getElementById('ed-email').value;
@@ -381,6 +473,7 @@ async function saveDriver(id,btn){
 }
 
 async function toggleDriver(id){
+  if(!adminOnly())return;
   const drivers=DB.drivers(),d=drivers.find(x=>x.id===id);
   d.status=d.status==='ativo'?'inativo':'ativo';DB.save('drivers',drivers);
   if(USE_SUPABASE){await DB.saveOne('drivers',d);}
@@ -393,8 +486,8 @@ function renderOcorrencias(c){
   const fines=incidents.filter(inc=>inc.type==='multa');
   const totalFines=fines.reduce((total,inc)=>total+(Number(inc.value)||0),0);
   const blocked=incidents.filter(inc=>inc.blocksVehicle&&inc.status!=='resolved');
-  c.innerHTML=alertHTML()+
-    '<div class="section-header"><span class="section-title">Ocorr\u00eancias e multas</span><button class="btn btn-primary btn-sm" onclick="openAddIncident()"><i class="ti ti-plus"></i> Nova</button></div>'+
+  c.innerHTML=alertHTML()+pageHero('ti-alert-triangle','Acompanhamento','Ocorrências','Monitore multas, chamados e bloqueios de veículos.',incidents.length+' registros')+
+    (isAdmin()?'<div class="section-header section-actions-only"><button class="btn btn-primary btn-sm" onclick="openAddIncident()"><i class="ti ti-plus"></i> Nova ocorrência</button></div>':'')+
     '<div class="card fine-summary"><div class="card-title"><i class="ti ti-receipt-2"></i> Consulta de multas registradas</div><div class="stat-grid"><div class="stat"><div class="stat-num">'+fines.length+'</div><div class="stat-label">Multas cadastradas</div></div><div class="stat"><div class="stat-num">R$ '+totalFines.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div><div class="stat-label">Valor acumulado</div></div><div class="stat"><div class="stat-num">'+blocked.length+'</div><div class="stat-label">Chamados bloqueando veículos</div></div></div><p class="fine-note"><i class="ti ti-info-circle"></i></p></div>'+
     '<div class="card"><div class="card-title"><i class="ti ti-search"></i> Consultar multas oficiais</div><div class="row"><div class="field"><label>Placa</label><input type="text" id="fine-plate" maxlength="7" autocomplete="off" placeholder="ABC1D23" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,\'\')"></div><div class="field"><label>RENAVAM</label><input type="text" id="fine-renavam" inputmode="numeric" maxlength="11" autocomplete="off" placeholder="Somente números" oninput="this.value=this.value.replace(/\\D/g,\'\')"></div></div><p class="fine-note"><i class="ti ti-shield-lock"></i> A consulta oficial abre o portal do DNIT. O resultado depende da autenticação e das validações exigidas pelo órgão.</p><div class="actions"><button class="btn btn-primary" onclick="consultOfficialFines()"><i class="ti ti-external-link"></i> Consultar no portal oficial</button><button class="btn btn-secondary" onclick="openManualFine()"><i class="ti ti-plus"></i> Registrar multa manualmente</button></div></div>'+
     (incidents.length===0?'<div class="empty"><i class="ti ti-shield-check"></i>Nenhuma ocorr\u00eancia registrada</div>':'')+
@@ -432,6 +525,7 @@ async function addIncident(btn){
 }
 
 async function deleteIncident(id){
+  if(!adminOnly())return;
   if(!confirm('Excluir esta ocorr\u00eancia?'))return;
   DB.save('incidents',DB.incidents().filter(i=>i.id!==id));
   if(USE_SUPABASE){await DB.removeOne('incidents',id);}
@@ -439,6 +533,7 @@ async function deleteIncident(id){
 }
 
 async function resolveIncident(id){
+  if(!adminOnly())return;
   const incident=DB.incidents().find(item=>item.id===id);if(!incident)return;
   if(!confirm('Resolver este chamado e liberar o veículo para novas viagens?'))return;
   incident.status='resolved';incident.resolvedAt=new Date().toISOString();
@@ -509,6 +604,8 @@ function renderRelatorio(c){
 }
 
 function buildReport(data=reportData()){
+  return buildModernReport(data);
+  /* Layout anterior mantido abaixo apenas como referência durante a transição. */
   const active=data.filter(item=>item.trips.length||item.incidents.length);
   if(!active.length)return '<div class="report-empty"><i class="ti ti-calendar-off"></i><strong>Nenhum dado encontrado</strong><span>Não há viagens ou ocorrências em '+escapeHTML(reportMonthLabel())+'.</span></div>';
   return active.map(({driver,trips,incidents})=>{
@@ -516,6 +613,16 @@ function buildReport(data=reportData()){
     const completed=trips.filter(trip=>trip.status==='closed').length;
     return '<article class="report-section"><header class="report-driver-head"><div class="report-driver"><div class="avatar">'+initials(driver.name)+'</div><div><h3>'+escapeHTML(driver.name)+'</h3><p>CNH: '+escapeHTML(driver.cnh||'Não informada')+' · '+escapeHTML(reportMonthLabel())+'</p></div></div><button class="btn btn-secondary btn-sm" onclick="printDriver('+driver.id+')"><i class="ti ti-printer"></i> Gerar PDF para assinatura</button></header><div class="report-metrics"><div><strong>'+trips.length+'</strong><span>Viagens</span></div><div><strong>'+completed+'</strong><span>Concluídas</span></div><div><strong>'+km+' km</strong><span>KM percorridos</span></div><div><strong>'+incidents.length+'</strong><span>Ocorrências</span></div></div>'+(trips.some(trip=>trip.status==='open')?'<div class="report-warning"><i class="ti ti-clock-exclamation"></i> Há '+trips.filter(trip=>trip.status==='open').length+' viagem(ns) em aberto neste período.</div>':'')+(trips.length?'<div class="report-table-wrap"><table class="report-table"><thead><tr><th>Data</th><th>OS</th><th>Veículo</th><th>Destino</th><th>Saída</th><th>Chegada</th><th>KM</th><th>Status</th></tr></thead><tbody>'+trips.map(trip=>'<tr><td>'+fmtDate(trip.startTime)+'</td><td>'+escapeHTML(trip.os||'-')+'</td><td>'+vehicleLabel(trip.vehicle)+'</td><td>'+escapeHTML(trip.destination||'-')+'</td><td>'+fmtTime(trip.startTime)+'</td><td>'+(trip.endTime?fmtTime(trip.endTime):'—')+'</td><td>'+(trip.kmStart&&trip.kmEnd?(parseInt(trip.kmEnd)-parseInt(trip.kmStart))+' km':'—')+'</td><td><span class="tag '+(trip.status==='open'?'tag-open':'tag-closed')+'">'+(trip.status==='open'?'Em aberto':'Concluída')+'</span></td></tr>').join('')+'</tbody></table></div>':'<div class="report-no-trips">Nenhuma viagem registrada no período.</div>')+(incidents.length?'<section class="report-incidents"><h4><i class="ti ti-alert-triangle"></i> Ocorrências do período</h4>'+incidents.map(incident=>'<div><span>'+fmtDate(incident.date)+' · '+escapeHTML(incident.type)+'</span><p>'+escapeHTML(incident.description)+(incident.value?' · R$ '+Number(incident.value).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}):'')+'</p></div>').join('')+'</section>':'')+'<footer class="report-signature"><p>Declaro que as informações deste relatório são verdadeiras e que utilizei os veículos conforme os registros acima.</p><div><span>Assinatura — '+escapeHTML(driver.name)+'</span><span>Data</span></div></footer></article>';
   }).join('');
+}
+
+function buildModernReport(data){
+  const active=data.filter(item=>item.trips.length||item.incidents.length);
+  if(!active.length)return '<div class="report-empty"><i class="ti ti-calendar-off"></i><strong>Nenhuma rota neste período</strong><span>Escolha outro mês ou motorista para consultar os dados.</span></div>';
+  return '<section class="report-stream">'+active.map(({driver,trips,incidents})=>{
+    const completed=trips.filter(trip=>trip.status==='closed').length;
+    const recent=[...trips].sort((a,b)=>new Date(b.startTime)-new Date(a.startTime));
+    return '<article class="report-section report-modern-card"><header class="report-driver-head"><div class="report-driver"><div class="avatar">'+initials(driver.name)+'</div><div><p class="report-kicker">Motorista</p><h3>'+escapeHTML(driver.name)+'</h3><p>'+escapeHTML(reportMonthLabel())+'</p></div></div><button class="btn btn-secondary btn-sm" onclick="printDriver('+driver.id+')"><i class="ti ti-file-download"></i> PDF</button></header><div class="report-metrics report-modern-metrics"><div><strong>'+trips.length+'</strong><span>Rotas</span></div><div><strong>'+completed+'</strong><span>Concluídas</span></div><div><strong>'+calcKm(trips)+' km</strong><span>Percorridos</span></div></div>'+(trips.some(trip=>trip.status==='open')?'<div class="report-warning"><i class="ti ti-clock-exclamation"></i> '+trips.filter(trip=>trip.status==='open').length+' rota(s) ainda em atendimento.</div>':'')+(recent.length?'<details class="report-routes"><summary><span><i class="ti ti-route"></i> Rotas do período</span><span>'+recent.length+' <i class="ti ti-chevron-down"></i></span></summary><div class="report-route-list">'+recent.map(trip=>'<div class="report-route-item"><div class="route-date">'+fmtDate(trip.startTime)+'</div><div class="route-main"><strong>'+escapeHTML(trip.client||trip.destination||'Rota sem cliente informado')+'</strong><span>OS '+escapeHTML(trip.os||'não informada')+' · '+escapeHTML(vehicleLabel(trip.vehicle))+'</span></div><div class="route-end"><span>'+((trip.kmStart&&trip.kmEnd)?(Number(trip.kmEnd)-Number(trip.kmStart))+' km':'—')+'</span><span class="tag '+(trip.status==='open'?'tag-open':'tag-closed')+'">'+(trip.status==='open'?'Em rota':'Concluída')+'</span></div></div>').join('')+'</div></details>':'')+(incidents.length?'<details class="report-routes report-issues"><summary><span><i class="ti ti-alert-triangle"></i> Ocorrências</span><span>'+incidents.length+' <i class="ti ti-chevron-down"></i></span></summary><div class="report-route-list">'+incidents.map(incident=>'<div class="report-route-item"><div class="route-date">'+fmtDate(incident.date)+'</div><div class="route-main"><strong>'+escapeHTML(incident.type)+'</strong><span>'+escapeHTML(incident.description)+'</span></div><div class="route-end">'+(incident.value?'<span>R$ '+Number(incident.value).toLocaleString('pt-BR',{minimumFractionDigits:2})+'</span>':'')+'</div></div>').join('')+'</div></details>':'')+'</article>';
+  }).join('')+'</section>';
 }
 
 async function printDriver(driverId){
@@ -530,14 +637,14 @@ async function printDriver(driverId){
   try{
     const jsPDF=await loadJsPDF(),doc=new jsPDF({unit:'mm',format:'a4'});
     const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),margin=14;let y=0;
-    function drawHeader(){doc.setFillColor(255,107,0);doc.rect(0,0,W,32,'F');safeAddLogo(doc,margin-2,5,22,22);doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(16);doc.text('Print Minas',40,15);doc.setFont('helvetica','normal');doc.setFontSize(10);doc.text('Relat\u00f3rio Mensal de Uso de Ve\u00edculo',40,22);}
+    function drawHeader(){doc.setFillColor(24,24,27);doc.rect(0,0,W,34,'F');doc.setFillColor(242,100,25);doc.rect(0,31,W,3,'F');safeAddLogo(doc,margin-2,6,21,21);doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(16);doc.text('Print Minas',40,16);doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(220,220,225);doc.text('Relatório mensal de rotas',40,22);doc.setFontSize(8);doc.text(reportMonthLabel(),W-margin,16,{align:'right'});}
     function ensureSpace(needed){if(y+needed>H-16){doc.addPage();drawHeader();y=44;}}
     drawHeader();y=44;doc.setTextColor(20,20,20);
     doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(driver.name,margin,y);y+=7;
     doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90,90,90);doc.text('CNH: '+(driver.cnh||'-')+'  \u2022  Per\u00edodo: '+reportMonthLabel(),margin,y);y+=10;
     const cardW=(W-margin*2-18)/4;
     [[String(trips.length),'Viagens'],[String(completed),'Conclu\u00eddas'],[km+' km','KM percorridos'],['R$ '+fineTotal.toFixed(2).replace('.',','),'Multas']].forEach((s,i)=>{
-      const x=margin+i*(cardW+6);doc.setFillColor(245,245,240);doc.roundedRect(x,y,cardW,18,2,2,'F');doc.setTextColor(255,107,0);doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(s[0],x+cardW/2,y+9,{align:'center'});doc.setTextColor(130,130,130);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(s[1],x+cardW/2,y+14.5,{align:'center'});
+      const x=margin+i*(cardW+6);doc.setFillColor(i===0?253:246,i===0?239:246,i===0?230:244);doc.roundedRect(x,y,cardW,18,3,3,'F');doc.setTextColor(i===0?210:35,i===0?78:35,i===0?10:35);doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(s[0],x+cardW/2,y+9,{align:'center'});doc.setTextColor(125,125,130);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(s[1],x+cardW/2,y+14.5,{align:'center'});
     });
     y+=28;doc.setTextColor(20,20,20);
     if(trips.length){
@@ -572,7 +679,7 @@ async function printDriver(driverId){
 // ─── QR CODE ─────────────────────────────────────────────────────────────────
 function renderQR(c){
   const url=window.location.href.split('?')[0].split('#')[0];
-  c.innerHTML=alertHTML()+
+  c.innerHTML=alertHTML()+pageHero('ti-qrcode','Acesso rápido','QR Code','Gere o acesso direto para os veículos.','Frota Print Minas')+
     '<div class="card"><div class="card-title"><i class="ti ti-qrcode"></i> QR Code para os ve\u00edculos</div>'+
     '<p style="font-size:13px;color:#666;margin-bottom:18px">Imprima e cole dentro do carro. O t\u00e9cnico escaneia com a c\u00e2mera do celular e j\u00e1 cai diretamente no formul\u00e1rio de sa\u00edda.</p>'+
     '<div class="qr-box"><div id="qr-render" style="display:flex;justify-content:center;margin-bottom:14px"></div>'+
@@ -601,7 +708,10 @@ function printQR(){
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function initApp(){
-  try{await DB.load();}
+  setupTheme();
+  new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node.nodeType===1){if(node.matches?.('select'))enhanceSelects(node.parentElement);else enhanceSelects(node);}}))).observe(document.body,{childList:true,subtree:true});
+  setupPWA();
+  try{await DB.load();await loadAdminSession();const sync=await DB.syncPending();if(sync.synced)console.info('Sincronização offline concluída:',sync.synced);}
   catch(error){console.warn('Falha ao carregar Supabase, usando dados locais.',error);showAlert('Falha ao carregar Supabase. Usando dados locais.','error');}
   finally{showTab('visao');}
 }
