@@ -1,1 +1,1 @@
-window.__CONFIG__ = {"SUPABASE_URL":"https://bkqpdfzyovrqfprvswqk.supabase.co","SUPABASE_ANON_KEY":"sb_publishable_F0lwWPJOUKCvf1Hl5_wJRg_STlD9eC7"};
+window.__CONFIG__ = {"SUPABASE_URL":"https://bkqpdfzyovrqfprvswqk.supabase.co","SUPABASE_ANON_KEY":"sb_publishable_F0lwWPJOUKCvf1Hl5_wJRg_STlD9eC7","ADMIN_EMAIL":"suporte@printminas.com.br"};

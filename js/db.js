@@ -1,3 +1,4 @@
+/* Print Minas - Gestão de Frota | Desenvolvido por Kaio Eduardo de Oliveira Barbosa */
 const _cfg = (typeof window !== 'undefined' && window.__CONFIG__) ? window.__CONFIG__ : {};
 const SUPABASE_URL = _cfg.SUPABASE_URL || 'https://bkqpdfzyovrqfprvswqk.supabase.co';
 const SUPABASE_ANON_KEY = _cfg.SUPABASE_ANON_KEY || 'sb_publishable_F0lwWPJOUKCvf1Hl5_wJRg_STlD9eC7';
@@ -12,7 +13,8 @@ try{
 const LOCAL_KEYS = {
   trips: 'pm_trips',
   drivers: 'pm_drivers',
-  incidents: 'pm_incidents'
+  incidents: 'pm_incidents',
+  outbox: 'pm_sync_outbox'
 };
 
 const TABLE_OF = { trips: 'trips', drivers: 'drivers', incidents: 'incidents' };
@@ -175,6 +177,14 @@ async function deleteOne(key, id){
   }
 }
 
+function pendingOperations(){return loadLocal('outbox');}
+function queueOperation(type,key,payload){
+  const id=type==='remove'?payload:payload.id;
+  const existing=pendingOperations().filter(item=>!(item.key===key&&item.id===id));
+  existing.push({type,key,id,payload,at:new Date().toISOString()});
+  saveLocal('outbox',existing);
+}
+
 const DB = {
   trips: () => cacheTrips,
   drivers: () => cacheDrivers,
@@ -189,12 +199,18 @@ const DB = {
 
   // Grava UM registro no remoto e aguarda concluir.
   async saveOne(key, item){
-    return await upsertOne(key, item);
+    if(!navigator.onLine){queueOperation('upsert',key,item);return false;}
+    const ok=await upsertOne(key,item);
+    if(!ok)queueOperation('upsert',key,item);
+    return ok;
   },
 
   // Remove UM registro do remoto e aguarda concluir.
   async removeOne(key, id){
-    return await deleteOne(key, id);
+    if(!navigator.onLine){queueOperation('remove',key,id);return false;}
+    const ok=await deleteOne(key,id);
+    if(!ok)queueOperation('remove',key,id);
+    return ok;
   },
 
   async load(){
@@ -218,6 +234,18 @@ const DB = {
       for(const d of cacheDrivers){ await upsertOne('drivers', d); }
     }
   }
+};
+
+DB.pendingCount=()=>pendingOperations().length;
+DB.syncPending=async function(){
+  if(!USE_SUPABASE||!navigator.onLine)return {synced:0,pending:pendingOperations().length};
+  const operations=pendingOperations(),remaining=[];let synced=0;
+  for(const operation of operations){
+    const ok=operation.type==='remove'?await deleteOne(operation.key,operation.id):await upsertOne(operation.key,operation.payload);
+    if(ok)synced++;else remaining.push(operation);
+  }
+  saveLocal('outbox',remaining);
+  return {synced,pending:remaining.length};
 };
 
 // ─── Sincronização remota (opcional) ─────────────────────────────────────────

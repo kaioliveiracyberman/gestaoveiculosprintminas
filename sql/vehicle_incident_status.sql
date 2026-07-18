@@ -21,4 +21,5 @@ CREATE INDEX IF NOT EXISTS incidents_open_vehicle_idx
 
 -- Histórico de alterações de registros de viagem.
 ALTER TABLE trips
-  ADD COLUMN IF NOT EXISTS change_log jsonb NOT NULL DEFAULT '[]'::jsonb;
+  ADD COLUMN IF NOT EXISTS change_log jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS client text;

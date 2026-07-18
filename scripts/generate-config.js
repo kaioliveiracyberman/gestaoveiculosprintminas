@@ -4,7 +4,8 @@ const path = require('path');
 // Use env vars if set, otherwise fall back to defaults
 const cfg = {
   SUPABASE_URL: process.env.SUPABASE_URL || 'https://bkqpdfzyovrqfprvswqk.supabase.co',
-  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || 'sb_publishable_F0lwWPJOUKCvf1Hl5_wJRg_STlD9eC7'
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || 'sb_publishable_F0lwWPJOUKCvf1Hl5_wJRg_STlD9eC7',
+  ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'suporte@printminas.com.br'
 };
 
 const out = `window.__CONFIG__ = ${JSON.stringify(cfg)};`;
