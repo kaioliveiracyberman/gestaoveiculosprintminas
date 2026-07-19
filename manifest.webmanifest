@@ -7,7 +7,7 @@
   "background_color": "#F6F7F9",
   "theme_color": "#F26419",
   "icons": [
-    { "src": "logo-printminas.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "logo-printminas.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "assets/logo-printminas.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "assets/logo-printminas.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

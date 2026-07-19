@@ -13,6 +13,3 @@ Desenvolvido por **Kaio Barbosa**.
 - `manifest.webmanifest` e `sw.js` — aplicativo instalável/offline
 - `sql/` — migrações do Supabase
 
-## Segurança
-
-Não publique chaves privadas. Antes do uso operacional, consulte [SECURITY.md](SECURITY.md).

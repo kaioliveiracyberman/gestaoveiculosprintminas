@@ -1,0 +1,23 @@
+/* Tokens, tipografia, reset e tema global. */
+*{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --font-sans:'Plus Jakarta Sans','Inter',system-ui,-apple-system,sans-serif;
+  --bg-page:#F6F7F9;
+  --surface:#ffffff;
+  --surface-muted:#F2F2EF;
+  --border:rgba(0,0,0,0.09);
+  --border-strong:rgba(0,0,0,0.16);
+  --text-primary:#1A1A1A;
+  --text-secondary:#65655F;
+  --text-muted:#9A9A93;
+  --accent:#F26419;
+  --accent-hover:#D24E0A;
+  --accent-bg:#FDEFE6;
+  --accent-text:#D24E0A;
+  --radius:10px;
+  --radius-lg:14px;
+}
+
+body{font-family:var(--font-sans);background:var(--bg-page);color:var(--text-primary);font-size:15px;font-weight:400;line-height:1.45;min-height:100vh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body.dark-theme{--bg-page:#121214;--surface:#1E1E21;--surface-muted:#29292D;--border:rgba(255,255,255,.11);--border-strong:rgba(255,255,255,.22);--text-primary:#F5F5F7;--text-secondary:#C4C4C8;--text-muted:#96969D;--accent-bg:#3A251C;color-scheme:dark}

@@ -11,20 +11,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <link rel="manifest" href="manifest.webmanifest">
   <title>Gestão de Frota</title>
-  <link rel="icon" type="image/png" href="logo-printminas.png">
+  <link rel="icon" type="image/png" href="assets/logo-printminas.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="css/style.css">
 </head>
 
 <body>
   <div class="app">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="logo"><img src="logo-printminas.png" alt="Print Minas"></div>
+        <div class="logo"><img src="assets/logo-printminas.png" alt="Print Minas"></div>
         <div>
           <h1>Frota</h1>
           <p>Print Minas</p>
@@ -44,7 +44,7 @@
       <div class="sidebar-tools">
         <div class="sidebar-admin"><button class="admin-access" id="admin-access" onclick="openAdminAccess()"><i
               class="ti ti-lock"></i><span>Área administrativa</span><span class="brand-pop" aria-hidden="true"><img
-                src="logo-printminas.png" alt=""></span></button></div>
+                src="assets/logo-printminas.png" alt=""></span></button></div>
         <button class="install-app" id="install-app" hidden><i class="ti ti-download"></i><span>Instalar
             aplicativo</span></button>
       </div>
@@ -52,7 +52,8 @@
 
     <main class="main" id="main-content"></main>
   </div>
-  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" aria-label="Alternar tema"><i class="ti ti-moon-stars"></i></button>
+  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" aria-label="Alternar tema"><i
+      class="ti ti-moon-stars"></i></button>
   <div id="modal-container"></div>
   <!-- Banco de dados -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>

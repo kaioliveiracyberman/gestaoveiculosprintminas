@@ -1,5 +1,5 @@
-const CACHE_NAME='print-minas-frota-v3';
-const APP_SHELL=['./','index.html','style.css','manifest.webmanifest','logo-printminas.png','js/config.js','js/db.js','js/app.js'];
+const CACHE_NAME='print-minas-frota-v5';
+const APP_SHELL=['./','index.html','css/style.css','css/base.css','css/layout.css','manifest.webmanifest','assets/logo-printminas.png','js/config.js','js/db.js','js/app.js'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(APP_SHELL)).then(()=>self.skipWaiting()));
