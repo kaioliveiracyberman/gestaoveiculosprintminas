@@ -24,7 +24,7 @@ function loadJsPDF() {
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
-const TAB_ORDER = ['visao', 'viagem', 'registros', 'motoristas', 'ocorrencias', 'relatorio', 'qr'];
+const TAB_ORDER = ['visao', 'viagem', 'registros', 'motoristas', 'ocorrencias', 'relatorio'];
 let activeTab = 'visao', alertMsg = null;
 const ADMIN_EMAIL = String(_cfg?.ADMIN_EMAIL || 'suporte@printminas.com.br').trim().toLowerCase();
 let adminSession = null;
@@ -120,7 +120,7 @@ function showTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.nav-btn').forEach((b, i) => b.classList.toggle('active', TAB_ORDER[i] === tab));
   const c = document.getElementById('main-content');
-  const renders = { visao: renderVisaoGeral, viagem: renderViagem, registros: renderRegistros, motoristas: renderMotoristas, ocorrencias: renderOcorrencias, relatorio: renderRelatorio, qr: renderQR };
+  const renders = { visao: renderVisaoGeral, viagem: renderViagem, registros: renderRegistros, motoristas: renderMotoristas, ocorrencias: renderOcorrencias, relatorio: renderRelatorio };
   renders[tab] && renders[tab](c);
   enhanceSelects(c);
 }
