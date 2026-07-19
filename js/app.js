@@ -702,6 +702,9 @@ async function initApp() {
   setupTheme();
   new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => { if (node.nodeType === 1) { if (node.matches?.('select')) enhanceSelects(node.parentElement); else enhanceSelects(node); } }))).observe(document.body, { childList: true, subtree: true });
   setupPWA();
+  // Não bloqueia a tela enquanto o Supabase responde. A atualização ocorre
+  // assim que a carga remota terminar ou atingir o limite de espera.
+  showTab('visao');
   try { await DB.load(); await loadAdminSession(); const sync = await DB.syncPending(); if (sync.synced) console.info('Sincronização offline concluída:', sync.synced); }
   catch (error) { console.warn('Falha ao carregar Supabase, usando dados locais.', error); showAlert('Falha ao carregar Supabase. Usando dados locais.', 'error'); }
   finally { showTab('visao'); }

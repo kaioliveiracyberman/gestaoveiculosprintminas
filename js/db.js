@@ -121,6 +121,7 @@ function setCache(key, data){
 // botão "Salvando..." ficava pendurado para sempre. Agora, depois de
 // UPSERT_TIMEOUT_MS, a função desiste e retorna false/erro.
 const UPSERT_TIMEOUT_MS = 20000;
+const LOAD_TIMEOUT_MS = 8000;
 
 function withTimeout(promise, ms){
   let timeoutId;
@@ -177,6 +178,15 @@ async function deleteOne(key, id){
   }
 }
 
+async function loadTableSafely(key, table){
+  try{
+    return await withTimeout(loadTable(key, table), LOAD_TIMEOUT_MS);
+  }catch(error){
+    console.warn(`Tempo limite ao carregar ${table}; usando dados deste aparelho.`, error);
+    return loadLocal(key);
+  }
+}
+
 function pendingOperations(){return loadLocal('outbox');}
 function queueOperation(type,key,payload){
   const id=type==='remove'?payload:payload.id;
@@ -214,7 +224,7 @@ const DB = {
   },
 
   async load(){
-    let drivers = await loadTable('drivers', 'drivers');
+    let drivers = await loadTableSafely('drivers', 'drivers');
     let seededDrivers = false;
     if(!Array.isArray(drivers) || drivers.length === 0){
       drivers = DEFAULT_DRIVERS;
@@ -222,8 +232,8 @@ const DB = {
     }
     cacheDrivers = drivers;
 
-    cacheTrips = await loadTable('trips', 'trips');
-    cacheIncidents = await loadTable('incidents', 'incidents');
+    cacheTrips = await loadTableSafely('trips', 'trips');
+    cacheIncidents = await loadTableSafely('incidents', 'incidents');
 
     saveLocal('drivers', cacheDrivers);
     saveLocal('trips', cacheTrips);
