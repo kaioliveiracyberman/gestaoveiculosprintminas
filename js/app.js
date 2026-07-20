@@ -205,7 +205,6 @@ function renderVisaoGeral(c) {
   const monthTrips = trips.filter(t => t.startTime && t.startTime.startsWith(currentMonth));
   const monthKm = calcKm(monthTrips);
   const monthIncidents = incidents.filter(i => i.date && i.date.startsWith(currentMonth)).length;
-  const openBlocks = incidents.filter(i => i.blocksVehicle && i.status !== 'resolved').length;
 
   const tripEvents = trips.map(t => ({
     kind: t.endTime ? 'trip-closed' : 'trip-open',
@@ -241,13 +240,13 @@ function renderVisaoGeral(c) {
     '<button class="stat-card-ov stat-action" onclick="showTab(\'registros\')" title="Ver registros"><div class="stat-icon ic-green"><i class="ti ti-route"></i></div><p class="stat-num-ov">' + tripsToday + '</p><p class="stat-label-ov">Viagens hoje</p></button>' +
     '<button class="stat-card-ov stat-action" onclick="showTab(\'registros\')" title="Ver quilometragem"><div class="stat-icon ic-blue"><i class="ti ti-gauge"></i></div><p class="stat-num-ov">' + monthKm + '</p><p class="stat-label-ov">Km rodados no m\u00eas</p></button>' +
     '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">' + monthIncidents + '</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>' +
-    '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">' + openBlocks + '</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>' +
     '</div></section>' +
+    (ongoingRoutes.length ? '<div class="activity-card ongoing-routes-card"><div class="activity-title"><span><i class="ti ti-progress-check"></i> Rotas em andamento</span><button class="btn btn-secondary btn-sm" onclick="showTab(\'viagem\')">Ver rotas</button></div>' + ongoingRoutes.map(t => '<button class="ongoing-route" onclick="viewTrip(' + t.id + ')"><span class="ongoing-route-icon"><i class="ti ti-' + ((t.routePoints || []).length ? 'map-pin-filled' : 'route-2') + '"></i></span><span class="ongoing-route-info"><strong>' + escapeHTML(t.driverName) + '</strong><small>' + escapeHTML(vehicleLabel(t.vehicle)) + (t.client ? ' · ' + escapeHTML(t.client) : t.destination ? ' · ' + escapeHTML(t.destination) : '') + ((t.routePoints || []).length ? ' · localização disponível' : '') + '</small></span><span class="ongoing-route-time">Ver opções</span><i class="ti ti-chevron-right"></i></button>').join('') + '</div>' : '') +
     '<div class="activity-card">' +
     '<p class="activity-title">Atividades recentes</p>' +
     (feed.length === 0 ? '<div class="empty"><i class="ti ti-map-off"></i>Nenhuma atividade registrada ainda</div>' :
       feed.map(ev => '<div class="activity-row">' + iconFor(ev) + '<div class="activity-info"><p class="activity-name">' + ev.title + '</p><p class="activity-meta">' + ev.meta + '</p></div><span class="activity-badge" style="' + badgeStyleFor(ev) + '">' + ev.badge + '</span></div>').join('')) +
-    '</div>' + (ongoingRoutes.length ? '<button class="route-tracker-popup" onclick="viewTrip(' + ongoingRoutes[0].id + ')"><span class="route-tracker-icon"><i class="ti ti-current-location"></i></span><span><small>ROTA EM ANDAMENTO</small><strong>' + escapeHTML(ongoingRoutes[0].driverName) + ' · ' + escapeHTML(vehicleLabel(ongoingRoutes[0].vehicle)) + '</strong><em><i class="ti ti-loader-2"></i> ' + ((ongoingRoutes[0].routePoints || []).length ? 'Atualizando localização' : 'Aguardando localização') + '</em></span><i class="ti ti-chevron-up"></i></button>' : '');
+    '</div>';
 }
 
 // ─── Photo preview ────────────────────────────────────────────────────────────
