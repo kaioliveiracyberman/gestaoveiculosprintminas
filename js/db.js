@@ -13,20 +13,26 @@ try{
 const LOCAL_KEYS = {
   trips: 'pm_trips',
   drivers: 'pm_drivers',
+  vehicles: 'pm_vehicles',
   incidents: 'pm_incidents',
   outbox: 'pm_sync_outbox'
 };
 
-const TABLE_OF = { trips: 'trips', drivers: 'drivers', incidents: 'incidents' };
+const TABLE_OF = { trips: 'trips', drivers: 'drivers', vehicles: 'vehicles', incidents: 'incidents' };
 
 const DEFAULT_DRIVERS = [
   {id:1, name:'Ricardo José Pedrosa', cnh:'ABC1234', phone:'31900001111', email:'', status:'ativo'},
   {id:2, name:'Zoldan Rasek da Silva Dias', cnh:'DEF5678', phone:'31900002222', email:'', status:'ativo'},
   {id:3, name:'Kaio Eduardo de Oliveira Barbosa', cnh:'GHI9012', phone:'31900003333', email:'', status:'ativo'}
 ];
+const DEFAULT_VEHICLES = [
+  {id: 1, name: 'FIORINO', plate: '', renavam: '', status: 'ativo'},
+  {id: 2, name: 'STRADA', plate: '', renavam: '', status: 'ativo'}
+];
 
 let cacheTrips = [];
 let cacheDrivers = [];
+let cacheVehicles = [];
 let cacheIncidents = [];
 
 function saveLocal(key, data){
@@ -98,6 +104,7 @@ async function loadTable(key, table){
       const data = await fetchTable(table);
       if(Array.isArray(data) && data.length) return data;
       if(key === 'drivers' && data.length === 0) return DEFAULT_DRIVERS;
+      if(key === 'vehicles' && data.length === 0) return DEFAULT_VEHICLES;
       // Uma resposta remota vazia ainda é uma resposta válida. Usar dados
       // locais nesse caso fazia rotas antigas reaparecerem como abertas.
       if(Array.isArray(data)) return data;
@@ -112,6 +119,7 @@ async function loadTable(key, table){
 
 function setCache(key, data){
   if(key === 'drivers') cacheDrivers = data;
+  if(key === 'vehicles') cacheVehicles = data;
   if(key === 'trips') cacheTrips = data;
   if(key === 'incidents') cacheIncidents = data;
 }
@@ -199,15 +207,18 @@ function queueOperation(type,key,payload){
 const DB = {
   trips: () => cacheTrips,
   drivers: () => cacheDrivers,
+  vehicles: () => cacheVehicles,
   incidents: () => cacheIncidents,
 
   // Mostra o último estado conhecido sem esperar a rede. Isso deixa o
   // aplicativo utilizável mesmo em áreas de sinal fraco.
   hydrateLocal(){
     cacheDrivers = loadLocal('drivers');
+    cacheVehicles = loadLocal('vehicles');
     cacheTrips = loadLocal('trips');
     cacheIncidents = loadLocal('incidents');
     if(!cacheDrivers.length) cacheDrivers = [...DEFAULT_DRIVERS];
+    if(!cacheVehicles.length) cacheVehicles = [...DEFAULT_VEHICLES];
   },
 
   // Salva a lista inteira no cache + localStorage (instantâneo),
@@ -234,8 +245,9 @@ const DB = {
   },
 
   async load(){
-    const [loadedDrivers, trips, incidents] = await Promise.all([
+    const [loadedDrivers, vehicles, trips, incidents] = await Promise.all([
       loadTableSafely('drivers', 'drivers'),
+      loadTableSafely('vehicles', 'vehicles'),
       loadTableSafely('trips', 'trips'),
       loadTableSafely('incidents', 'incidents')
     ]);
@@ -246,17 +258,22 @@ const DB = {
       seededDrivers = true;
     }
     cacheDrivers = drivers;
+    cacheVehicles = Array.isArray(vehicles) && vehicles.length ? vehicles : DEFAULT_VEHICLES;
 
     cacheTrips = trips;
     cacheIncidents = incidents;
 
     saveLocal('drivers', cacheDrivers);
+    saveLocal('vehicles', cacheVehicles);
     saveLocal('trips', cacheTrips);
     saveLocal('incidents', cacheIncidents);
 
     if(USE_SUPABASE && seededDrivers){
       // semeia os motoristas padrão remotamente, um a um
       for(const d of cacheDrivers){ await upsertOne('drivers', d); }
+    }
+    if(USE_SUPABASE && (!Array.isArray(vehicles) || vehicles.length === 0)){
+      for(const vehicle of cacheVehicles){ await upsertOne('vehicles', vehicle); }
     }
   }
 };
@@ -277,9 +294,12 @@ DB.syncPending=async function(){
 DB.syncFromRemote = async function(){
   if(!USE_SUPABASE) throw new Error('Supabase not configured');
   cacheDrivers = (await fetchTable('drivers')) || [];
+  try { cacheVehicles = (await fetchTable('vehicles')) || []; } catch (error) { console.warn('Tabela de veículos ainda não disponível.', error); cacheVehicles = loadLocal('vehicles'); }
+  if(!cacheVehicles.length) cacheVehicles = [...DEFAULT_VEHICLES];
   cacheTrips = (await fetchTable('trips')) || [];
   cacheIncidents = (await fetchTable('incidents')) || [];
   saveLocal('drivers', cacheDrivers);
+  saveLocal('vehicles', cacheVehicles);
   saveLocal('trips', cacheTrips);
   saveLocal('incidents', cacheIncidents);
   console.info('DB: syncFromRemote completed');

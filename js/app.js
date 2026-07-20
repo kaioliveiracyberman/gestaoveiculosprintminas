@@ -50,7 +50,7 @@ function loadJsPDF() {
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
-const TAB_ORDER = ['visao', 'viagem', 'registros', 'motoristas', 'ocorrencias', 'relatorio'];
+const TAB_ORDER = ['visao', 'viagem', 'registros', 'motoristas', 'veiculos', 'ocorrencias', 'relatorio'];
 let activeTab = 'visao', alertMsg = null;
 const ADMIN_EMAIL = String(_cfg?.ADMIN_EMAIL || 'suporte@printminas.com.br').trim().toLowerCase();
 let adminSession = null;
@@ -104,6 +104,7 @@ function escapeHTML(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 function vehicleLabel(vehicle) { return escapeHTML(vehicle || 'Veículo não informado'); }
+function vehicleOptions(selected = '') { const vehicles = (DB.vehicles?.() || []).filter(vehicle => vehicle.status !== 'inativo'); return vehicles.map(vehicle => '<option value="' + escapeHTML(vehicle.name) + '" ' + (vehicle.name === selected ? 'selected' : '') + '>' + escapeHTML(vehicle.name) + '</option>').join(''); }
 const STALE_ROUTE_HOURS = 48;
 function isStaleOpenTrip(trip) { return !trip?.endTime && (trip.status === 'stale' || (trip.startTime && Date.now() - new Date(trip.startTime).getTime() > STALE_ROUTE_HOURS * 60 * 60 * 1000)); }
 function isActiveTrip(trip) { return !trip?.endTime && !isStaleOpenTrip(trip); }
@@ -154,7 +155,7 @@ function showTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.nav-btn').forEach((b, i) => b.classList.toggle('active', TAB_ORDER[i] === tab));
   const c = document.getElementById('main-content');
-  const renders = { visao: renderVisaoGeral, viagem: renderViagem, registros: renderRegistros, motoristas: renderMotoristas, ocorrencias: renderOcorrencias, relatorio: renderRelatorio };
+  const renders = { visao: renderVisaoGeral, viagem: renderViagem, registros: renderRegistros, motoristas: renderMotoristas, veiculos: renderVeiculos, ocorrencias: renderOcorrencias, relatorio: renderRelatorio };
   renders[tab] && renders[tab](c);
   enhanceSelects(c);
 }
@@ -242,12 +243,11 @@ function renderVisaoGeral(c) {
     '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">' + monthIncidents + '</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>' +
     '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">' + openBlocks + '</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>' +
     '</div></section>' +
-    (ongoingRoutes.length ? '<div class="activity-card ongoing-routes-card"><div class="activity-title"><span><i class="ti ti-progress-check"></i> Rotas em andamento</span><button class="btn btn-secondary btn-sm" onclick="showTab(\'viagem\')">Ver rotas</button></div>' + ongoingRoutes.map(t => '<button class="ongoing-route" onclick="' + ((t.routePoints || []).length ? 'viewRouteMap(' + t.id + ')' : 'showTab(\\\'viagem\\\')') + '"><span class="ongoing-route-icon"><i class="ti ti-' + ((t.routePoints || []).length ? 'map-pin-filled' : 'route-2') + '"></i></span><span class="ongoing-route-info"><strong>' + escapeHTML(t.driverName) + '</strong><small>' + escapeHTML(vehicleLabel(t.vehicle)) + (t.client ? ' · ' + escapeHTML(t.client) : t.destination ? ' · ' + escapeHTML(t.destination) : '') + ((t.routePoints || []).length ? ' · localização disponível' : '') + '</small></span><span class="ongoing-route-time">' + ((t.routePoints || []).length ? 'Ver mapa' : 'há ' + formatElapsedTime(t.startTime)) + '</span><i class="ti ti-chevron-right"></i></button>').join('') + '</div>' : '') +
     '<div class="activity-card">' +
     '<p class="activity-title">Atividades recentes</p>' +
     (feed.length === 0 ? '<div class="empty"><i class="ti ti-map-off"></i>Nenhuma atividade registrada ainda</div>' :
       feed.map(ev => '<div class="activity-row">' + iconFor(ev) + '<div class="activity-info"><p class="activity-name">' + ev.title + '</p><p class="activity-meta">' + ev.meta + '</p></div><span class="activity-badge" style="' + badgeStyleFor(ev) + '">' + ev.badge + '</span></div>').join('')) +
-    '</div>';
+    '</div>' + (ongoingRoutes.length ? '<button class="route-tracker-popup" onclick="viewTrip(' + ongoingRoutes[0].id + ')"><span class="route-tracker-icon"><i class="ti ti-current-location"></i></span><span><small>ROTA EM ANDAMENTO</small><strong>' + escapeHTML(ongoingRoutes[0].driverName) + ' · ' + escapeHTML(vehicleLabel(ongoingRoutes[0].vehicle)) + '</strong><em><i class="ti ti-loader-2"></i> ' + ((ongoingRoutes[0].routePoints || []).length ? 'Atualizando localização' : 'Aguardando localização') + '</em></span><i class="ti ti-chevron-up"></i></button>' : '');
 }
 
 // ─── Photo preview ────────────────────────────────────────────────────────────
@@ -335,13 +335,13 @@ function renderViagem(c) {
   const openTrips = DB.trips().filter(isActiveTrip);
   c.innerHTML = alertHTML() + pageHero('ti-route', 'Operação externa', 'Nova rota', 'Registre a saída para um novo atendimento.', 'Rotas') +
     (openTrips.length ? '<div class="card"><div class="card-title"><i class="ti ti-progress-check"></i> Atendimento em andamento</div>' +
-      openTrips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="confirmFinishRoute(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-building"></i>' + escapeHTML(t.destination || '-') + '</span><span><i class="ti ti-clock"></i>' + fmt(t.startTime) + '</span></div></div><span class="tag tag-open">Em atendimento</span></div>' + gpsStatusMarkup(t) + (Array.isArray(t.routePoints) && t.routePoints.length ? '<div class="gps-route-actions" onclick="event.stopPropagation()"><button class="btn btn-secondary btn-sm" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver localização</button></div>' : '') + '<p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para finalizar esta rota</p></div>').join('') +
+      openTrips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="viewTrip(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-building"></i>' + escapeHTML(t.destination || '-') + '</span><span><i class="ti ti-clock"></i>' + fmt(t.startTime) + '</span></div></div><span class="tag tag-open">Em atendimento</span></div>' + gpsStatusMarkup(t) + '<p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para ver opções da rota</p></div>').join('') +
       '</div>' : '') +
     '<div class="card"><div class="card-title"><i class="ti ti-route"></i> Nova rota</div>' +
     '<div class="field"><label>Motorista</label><select id="v-driver"><option value="">Selecione o motorista...</option>' +
     drivers.map(d => '<option value="' + d.id + '">' + escapeHTML(d.name) + '</option>').join('') +
     '</select></div>' +
-    '<div class="row"><div class="field"><label>Ve\u00edculo</label><select id="v-vehicle" onchange="updateVehicleAvailability()"><option value="FIORINO">FIORINO</option><option value="STRADA">STRADA</option></select><p id="vehicle-availability" class="vehicle-status"></p></div>' +
+    '<div class="row"><div class="field"><label>Ve\u00edculo</label><select id="v-vehicle" onchange="updateVehicleAvailability()">' + vehicleOptions('FIORINO') + '</select><p id="vehicle-availability" class="vehicle-status"></p></div>' +
     '<div class="field"><label>OS / chamado</label><input type="text" id="v-os" placeholder="Ex: OS-2024-001"></div></div>' +
     '<div class="row"><div class="field"><label>Data de sa\u00edda</label><input type="date" id="v-date" value="' + new Date().toISOString().split('T')[0] + '"></div>' +
     '<div class="field"><label>Hor\u00e1rio de sa\u00edda</label><input type="time" id="v-time" value="' + new Date().toTimeString().slice(0, 5) + '"></div></div>' +
@@ -538,6 +538,11 @@ function openPhotoPreview(src, label) {
 }
 
 // ─── MOTORISTAS ──────────────────────────────────────────────────────────────
+let driverDocumentDraft = null;
+function readDriverDocument(input) { if (!driverDocumentDraft) driverDocumentDraft = {}; readAttachment(input, driverDocumentDraft); const label = document.getElementById('driver-doc-name'); if (label && driverDocumentDraft.name) label.textContent = 'Anexado: ' + driverDocumentDraft.name; }
+function insertDriverDocumentField() { setTimeout(() => { const email = document.getElementById('nd-email') || document.getElementById('ed-email'); if (!email || document.getElementById('driver-doc-name')) return; email.closest('.field').insertAdjacentHTML('afterend', '<div class="field"><label>Documento da CNH <small>(foto ou PDF, até 1,5 MB)</small></label><input type="file" accept="application/pdf,image/*" onchange="readDriverDocument(this)"><small id="driver-doc-name" class="file-name"></small></div>'); }, 0); }
+async function saveDriverDocument(driverId) { if (!driverDocumentDraft?.data || !USE_SUPABASE) return true; const { error } = await supabaseClient.from('driver_documents').insert({ id: genId(), driver_id: driverId, file_data: driverDocumentDraft.data, file_name: driverDocumentDraft.name }); return !error; }
+async function openDriverDocument(driverId) { if (!adminOnly() || !USE_SUPABASE) return; const { data, error } = await supabaseClient.from('driver_documents').select('*').eq('driver_id', driverId).order('created_at', { ascending: false }).limit(1); if (error || !data?.length) { showAlert('Nenhum documento de CNH anexado.', 'error'); return; } const doc = data[0]; document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide"><div class="modal-title">Documento da CNH<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="photo-modal-subtitle">' + escapeHTML(doc.file_name) + '</p><iframe class="driver-document-frame" src="' + doc.file_data + '" title="Documento da CNH"></iframe></div></div>'; }
 function renderMotoristas(c) {
   const drivers = DB.drivers(), trips = DB.trips();
   const activeDrivers=drivers.filter(driver=>driver.status==='ativo').length;
@@ -551,11 +556,13 @@ function renderMotoristas(c) {
 function viewDriver(id) {
   const d = DB.drivers().find(item => item.id === id); if (!d) return;
   const dtrips = DB.trips().filter(item => item.driverId === d.id), km = calcKm(dtrips);
+  if (isAdmin()) setTimeout(() => { const actions = document.querySelector('#modal-container .confirm-actions'); if (actions) actions.insertAdjacentHTML('afterbegin', '<button class="btn btn-secondary" onclick="openDriverDocument(' + d.id + ')"><i class="ti ti-file-description"></i> CNH</button>'); }, 0);
   document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Motorista<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="driver-profile"><div class="avatar">' + initials(d.name) + '</div><div><strong>' + escapeHTML(d.name) + '</strong><p>CNH: ' + escapeHTML(d.cnh || 'Não informada') + '<br>Telefone: ' + escapeHTML(d.phone || 'Não informado') + '<br>E-mail: ' + escapeHTML(d.email || 'Não informado') + '</p></div></div><div class="report-metrics"><div><strong>' + dtrips.length + '</strong><span>Rotas</span></div><div><strong>' + km + ' km</strong><span>Percorridos</span></div></div>' + (isAdmin()?'<div class="confirm-actions"><button class="btn btn-primary" onclick="editDriver(' + d.id + ')"><i class="ti ti-edit"></i> Editar motorista</button><button class="btn btn-secondary" onclick="toggleDriver(' + d.id + ');closeModal()"><i class="ti ' + (d.status === 'ativo' ? 'ti-user-off' : 'ti-user-check') + '"></i> ' + (d.status === 'ativo' ? 'Desativar' : 'Ativar') + '</button></div>':'') + '</div></div>';
 }
 
 function openAddDriver() {
   if (!adminOnly()) return;
+  driverDocumentDraft = null; insertDriverDocumentField();
   document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Novo motorista <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="field"><label>Nome completo *</label><input type="text" id="nd-name" placeholder="Nome do motorista"></div><div class="row"><div class="field"><label>CNH</label><input type="text" id="nd-cnh" placeholder="N\u00famero da CNH"></div><div class="field"><label>Telefone</label><input type="tel" id="nd-phone" placeholder="(31) 9 xxxxxx"></div></div><div class="field"><label>E-mail</label><input type="email" id="nd-email" placeholder="email@exemplo.com"></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="addDriver(this)"><i class="ti ti-plus"></i> Cadastrar</button></div></div>';
 }
 
@@ -566,7 +573,7 @@ async function addDriver(btn) {
   const drivers = DB.drivers(); drivers.push(driver);
   _saving = true; setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
   let ok = true;
-  try { DB.save('drivers', drivers); if (USE_SUPABASE) { ok = await DB.saveOne('drivers', driver); } }
+  try { DB.save('drivers', drivers); if (USE_SUPABASE) { ok = await DB.saveOne('drivers', driver); if (ok) ok = await saveDriverDocument(driver.id); } }
   catch (err) { console.error('Erro ao cadastrar motorista:', err); ok = false; }
   finally { _saving = false; setBusy(btn, false); }
   closeModal(); showAlert(ok ? 'Motorista cadastrado!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
@@ -575,6 +582,7 @@ async function addDriver(btn) {
 function editDriver(id) {
   if (!adminOnly()) return;
   const d = DB.drivers().find(x => x.id === id); if (!d) return;
+  driverDocumentDraft = null; insertDriverDocumentField();
   document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Editar motorista <button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="field"><label>Nome completo</label><input type="text" id="ed-name" value="' + d.name + '"></div><div class="row"><div class="field"><label>CNH</label><input type="text" id="ed-cnh" value="' + (d.cnh || '') + '"></div><div class="field"><label>Telefone</label><input type="tel" id="ed-phone" value="' + (d.phone || '') + '"></div></div><div class="field"><label>E-mail</label><input type="email" id="ed-email" value="' + (d.email || '') + '"></div><button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveDriver(' + id + ', this)"><i class="ti ti-check"></i> Salvar</button></div></div>';
 }
 
@@ -585,7 +593,7 @@ async function saveDriver(id, btn) {
   d.name = document.getElementById('ed-name').value; d.cnh = document.getElementById('ed-cnh').value; d.phone = document.getElementById('ed-phone').value; d.email = document.getElementById('ed-email').value;
   _saving = true; setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
   let ok = true;
-  try { DB.save('drivers', drivers); if (USE_SUPABASE) { ok = await DB.saveOne('drivers', d); } }
+  try { DB.save('drivers', drivers); if (USE_SUPABASE) { ok = await DB.saveOne('drivers', d); if (ok) ok = await saveDriverDocument(d.id); } }
   catch (err) { console.error('Erro ao salvar motorista:', err); ok = false; }
   finally { _saving = false; setBusy(btn, false); }
   closeModal(); showAlert(ok ? 'Dados atualizados!' : 'Salvo no aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
@@ -598,6 +606,41 @@ async function toggleDriver(id) {
   if (USE_SUPABASE) { await DB.saveOne('drivers', d); }
   renderMotoristas(document.getElementById('main-content'));
 }
+
+// ─── VEÍCULOS ───────────────────────────────────────────────────────────────
+let vehicleDocumentDraft = null;
+function readAttachment(input, target) {
+  const file = input.files?.[0]; if (!file) return;
+  if (file.size > 1500000) { showAlert('O documento deve ter no máximo 1,5 MB.', 'error'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = () => { target.data = reader.result; target.name = file.name; const label = document.getElementById('vehicle-doc-name'); if (label) label.textContent = 'Anexado: ' + file.name; };
+  reader.onerror = () => showAlert('Não foi possível ler o documento.', 'error'); reader.readAsDataURL(file);
+}
+function readVehicleDocument(input) { if (!vehicleDocumentDraft) vehicleDocumentDraft = {}; readAttachment(input, vehicleDocumentDraft); }
+async function saveVehicleDocument(vehicleId) { if (!vehicleDocumentDraft?.data || !USE_SUPABASE) return true; const { error } = await supabaseClient.from('vehicle_documents').insert({ id: genId(), vehicle_id: vehicleId, file_data: vehicleDocumentDraft.data, file_name: vehicleDocumentDraft.name }); return !error; }
+async function openVehicleDocument(vehicleId) { if (!adminOnly() || !USE_SUPABASE) return; const { data, error } = await supabaseClient.from('vehicle_documents').select('*').eq('vehicle_id', vehicleId).order('created_at', { ascending: false }).limit(1); if (error || !data?.length) { showAlert('Nenhum documento anexado para este veículo.', 'error'); return; } const doc = data[0]; document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide"><div class="modal-title">Documento do veículo<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="photo-modal-subtitle">' + escapeHTML(doc.file_name) + '</p><iframe class="driver-document-frame" src="' + doc.file_data + '" title="Documento do veículo"></iframe></div></div>'; }
+function renderVeiculos(c) {
+  const vehicles = DB.vehicles();
+  c.innerHTML = alertHTML() + '<section class="driver-hero"><div><p class="report-eyebrow"><i class="ti ti-car"></i> Frota cadastrada</p><h2>Veículos</h2><p>Gerencie documentos, placas e disponibilidade da frota.</p></div><div class="driver-hero-actions"><span class="report-period">' + vehicles.filter(v => v.status === 'ativo').length + ' ativos</span>' + (isAdmin() ? '<button class="btn btn-primary" onclick="openAddVehicle()"><i class="ti ti-plus"></i> Novo veículo</button>' : '') + '</div></section><div class="driver-list">' + (vehicles.length ? vehicles.map(vehicle => '<article class="driver-card driver-card-modern clickable-card" role="button" tabindex="0" onclick="viewVehicle(' + vehicle.id + ')"><div class="avatar"><i class="ti ti-car"></i></div><div class="driver-card-info"><strong>' + escapeHTML(vehicle.name) + '</strong><span>Placa: ' + escapeHTML(vehicle.plate || 'não informada') + ' · RENAVAM: ' + escapeHTML(vehicle.renavam || 'não informado') + '</span><div class="driver-card-metrics"><span class="badge"><i class="ti ti-file-description"></i> ' + (vehicle.hasDocument ? 'documento anexado' : 'sem documento') + '</span><span class="driver-status ' + (vehicle.status === 'ativo' ? 'is-active' : 'is-inactive') + '">' + escapeHTML(vehicle.status || 'ativo') + '</span></div></div><i class="ti ti-chevron-right driver-chevron"></i></article>').join('') : '<div class="empty"><i class="ti ti-car-off"></i>Nenhum veículo cadastrado.</div>') + '</div>';
+}
+function openAddVehicle() {
+  if (!adminOnly()) return; vehicleDocumentDraft = null;
+  document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Novo veículo<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="field"><label>Nome / identificação *</label><input id="nv-name" placeholder="Ex: FIORINO"></div><div class="row"><div class="field"><label>Placa</label><input id="nv-plate" placeholder="ABC1D23"></div><div class="field"><label>RENAVAM</label><input id="nv-renavam" inputmode="numeric" placeholder="Somente números"></div></div><div class="field"><label>Documento do veículo <small>(foto ou PDF, até 1,5 MB)</small></label><input type="file" accept="application/pdf,image/*" onchange="readVehicleDocument(this)"><small id="vehicle-doc-name" class="file-name"></small></div><button class="btn btn-primary" style="width:100%" onclick="addVehicle(this)"><i class="ti ti-plus"></i> Cadastrar veículo</button></div></div>';
+  vehicleDocumentDraft = {};
+}
+async function addVehicle(btn) {
+  if (!adminOnly() || _saving) return; const name = document.getElementById('nv-name').value.trim(); if (!name) { showAlert('Informe o nome do veículo.', 'error'); return; }
+  const vehicle = { id: genId(), name: name.toUpperCase(), plate: normalizePlate(document.getElementById('nv-plate').value), renavam: normalizeRenavam(document.getElementById('nv-renavam').value), status: 'ativo', hasDocument: Boolean(vehicleDocumentDraft?.data) };
+  const vehicles = DB.vehicles(); vehicles.push(vehicle); _saving = true; setBusy(btn, true, 'Salvando...'); let ok = true;
+  try { DB.save('vehicles', vehicles); if (USE_SUPABASE) { ok = await DB.saveOne('vehicles', vehicle); if (ok) ok = await saveVehicleDocument(vehicle.id); } } catch (error) { console.error(error); ok = false; } finally { _saving = false; setBusy(btn, false); }
+  closeModal(); showAlert(ok ? 'Veículo cadastrado!' : 'Salvo neste aparelho, mas falhou no servidor.', ok ? 'success' : 'error');
+}
+function viewVehicle(id) {
+  const vehicle = DB.vehicles().find(item => item.id === id); if (!vehicle) return;
+  const documentAction = vehicle.hasDocument && isAdmin() ? '<button class="btn btn-secondary" onclick="openVehicleDocument(' + vehicle.id + ')"><i class="ti ti-paperclip"></i> Abrir documento</button>' : '';
+  document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Veículo<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>' + escapeHTML(vehicle.name) + '</strong><div class="trip-meta"><span><i class="ti ti-license"></i>Placa: ' + escapeHTML(vehicle.plate || 'Não informada') + '</span><span><i class="ti ti-file-text"></i>RENAVAM: ' + escapeHTML(vehicle.renavam || 'Não informado') + '</span></div></div><div class="confirm-actions">' + documentAction + (isAdmin() ? '<button class="btn btn-danger" onclick="deleteVehicle(' + vehicle.id + ')"><i class="ti ti-trash"></i> Excluir veículo</button>' : '') + '</div></div></div>';
+}
+async function deleteVehicle(id) { if (!adminOnly() || !confirm('Excluir este veículo da frota?')) return; const vehicles = DB.vehicles().filter(vehicle => vehicle.id !== id); DB.save('vehicles', vehicles); if (USE_SUPABASE) await DB.removeOne('vehicles', id); closeModal(); showTab('veiculos'); }
 
 // ─── OCORRÊNCIAS ─────────────────────────────────────────────────────────────
 function renderOcorrencias(c) {
