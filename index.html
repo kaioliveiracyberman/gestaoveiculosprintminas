@@ -25,11 +25,14 @@
   <div class="app">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="logo"><img src="assets/logo-printminas.png" alt="Print Minas"></div>
-        <div>
-          <h1>Frota</h1>
-          <p>Print Minas</p>
-        </div>
+        <button class="brand-home" onclick="showTab('visao')" title="Voltar para Visão geral" aria-label="Voltar para Visão geral">
+          <span class="logo"><img src="assets/logo-printminas.png" alt="Print Minas"></span>
+          <span>
+            <h1>Frota</h1>
+            <p>Print Minas</p>
+          </span>
+        </button>
+        <button class="admin-access" id="admin-access" onclick="openAdminAccess()" title="Área administrativa" aria-label="Área administrativa"><i class="ti ti-lock"></i></button>
       </div>
 
       <nav class="sidebar-nav">
@@ -43,9 +46,6 @@
         <button class="nav-btn" onclick="showTab('relatorio')"><i class="ti ti-file-text"></i>Relatório</button>
       </nav>
       <div class="sidebar-tools">
-        <div class="sidebar-admin"><button class="admin-access" id="admin-access" onclick="openAdminAccess()"><i
-              class="ti ti-lock"></i><span>Área administrativa</span><span class="brand-pop" aria-hidden="true"><img
-                src="assets/logo-printminas.png" alt=""></span></button></div>
         <button class="install-app" id="install-app" hidden><i class="ti ti-download"></i><span>Instalar
             aplicativo</span></button>
       </div>

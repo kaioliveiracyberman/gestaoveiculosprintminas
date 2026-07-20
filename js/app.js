@@ -55,7 +55,7 @@ let activeTab = 'visao', alertMsg = null;
 const ADMIN_EMAIL = String(_cfg?.ADMIN_EMAIL || 'suporte@printminas.com.br').trim().toLowerCase();
 let adminSession = null;
 function isAdmin() { return !!adminSession; }
-function updateAdminAccess() { document.body.classList.toggle('admin-mode', isAdmin()); const button = document.getElementById('admin-access'); if (!button) return; button.classList.toggle('is-admin', isAdmin()); button.innerHTML = (isAdmin() ? '<i class="ti ti-shield-check"></i><span>Modo administrador</span>' : '<i class="ti ti-lock"></i><span>Área administrativa</span>') + '<span class="brand-pop" aria-hidden="true"><img src="assets/logo-printminas.png" alt=""></span>'; }
+function updateAdminAccess() { document.body.classList.toggle('admin-mode', isAdmin()); const button = document.getElementById('admin-access'); if (!button) return; const admin = isAdmin(); button.classList.toggle('is-admin', admin); button.innerHTML = '<i class="ti ti-' + (admin ? 'shield-check' : 'lock') + '"></i>'; button.title = admin ? 'Modo administrador' : 'Área administrativa'; button.setAttribute('aria-label', button.title); }
 async function loadAdminSession() { if (!supabaseClient) return; const { data } = await supabaseClient.auth.getSession(); const email = data.session?.user?.email?.toLowerCase(); adminSession = email === ADMIN_EMAIL ? data.session : null; if (data.session && !adminSession) await supabaseClient.auth.signOut(); updateAdminAccess(); }
 function adminOnly() { if (isAdmin()) return true; showAlert('Acesso restrito ao administrador.', 'error'); return false; }
 function openAdminAccess() {
@@ -83,6 +83,7 @@ async function refreshFromServer() {
     const pending = await DB.syncPending();
     if (pending.pending) return false;
     await DB.syncFromRemote();
+    await archiveStaleOpenTrips();
     showTab(activeTab);
     return true;
   })().catch(error => { console.warn('Falha ao atualizar dados do servidor:', error); return false; }).finally(() => { remoteRefreshPromise = null; });
@@ -103,7 +104,18 @@ function escapeHTML(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 function vehicleLabel(vehicle) { return escapeHTML(vehicle || 'Veículo não informado'); }
-function openVehicleTrip(vehicle) { return DB.trips().find(trip => trip.vehicle === vehicle && !trip.endTime); }
+const STALE_ROUTE_HOURS = 48;
+function isStaleOpenTrip(trip) { return !trip?.endTime && (trip.status === 'stale' || (trip.startTime && Date.now() - new Date(trip.startTime).getTime() > STALE_ROUTE_HOURS * 60 * 60 * 1000)); }
+function isActiveTrip(trip) { return !trip?.endTime && !isStaleOpenTrip(trip); }
+async function archiveStaleOpenTrips() {
+  const stale = DB.trips().filter(isStaleOpenTrip).filter(trip => trip.status !== 'stale');
+  if (!stale.length) return 0;
+  stale.forEach(trip => { trip.status = 'stale'; });
+  DB.save('trips', DB.trips());
+  if (USE_SUPABASE && navigator.onLine) await Promise.all(stale.map(trip => DB.saveOne('trips', trip)));
+  return stale.length;
+}
+function openVehicleTrip(vehicle) { return DB.trips().find(trip => trip.vehicle === vehicle && isActiveTrip(trip)); }
 function vehicleBlock(vehicle) { return DB.incidents().find(incident => incident.vehicle === vehicle && incident.blocksVehicle && incident.status !== 'resolved'); }
 function lastVehicleKm(vehicle) {
   const lastTrip = DB.trips().filter(trip => trip.vehicle === vehicle).sort((a, b) => new Date(b.endTime || b.startTime) - new Date(a.endTime || a.startTime))[0];
@@ -187,7 +199,7 @@ function renderVisaoGeral(c) {
   const today = new Date().toISOString().split('T')[0];
   const currentMonth = new Date().toISOString().slice(0, 7);
   const activeDrivers = drivers.filter(d => d.status === 'ativo').length;
-  const openTrips = trips.filter(t => !t.endTime).length;
+  const openTrips = trips.filter(isActiveTrip).length;
   const tripsToday = trips.filter(t => t.startTime && t.startTime.startsWith(today)).length;
   const monthTrips = trips.filter(t => t.startTime && t.startTime.startsWith(currentMonth));
   const monthKm = calcKm(monthTrips);
@@ -220,7 +232,7 @@ function renderVisaoGeral(c) {
     return 'background:#FAECE7;color:#993C1D';
   }
 
-  const ongoingRoutes = trips.filter(t => !t.endTime).sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  const ongoingRoutes = trips.filter(isActiveTrip).sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
   c.innerHTML = alertHTML() + '<section class="overview-panel">' + pageHero('ti-layout-dashboard', 'Painel operacional', 'Visão geral', 'Acompanhe a frota, rotas e atividades recentes.', 'Hoje') +
     '<div class="stat-grid-ov">' +
     '<button class="stat-card-ov stat-action" onclick="showTab(\'motoristas\')" title="Ver motoristas"><div class="stat-icon ic-blue"><i class="ti ti-users"></i></div><p class="stat-num-ov">' + activeDrivers + '</p><p class="stat-label-ov">Motoristas ativos</p></button>' +
@@ -284,7 +296,7 @@ function stopGpsTracking(tripId) { if (tripId && activeGpsTripId !== tripId) ret
 async function persistGpsPoint(trip, remote = false) { DB.save('trips', DB.trips()); if (remote && USE_SUPABASE) await DB.saveOne('trips', trip); }
 function startGpsTracking(tripId) {
   const trip = DB.trips().find(item => item.id === tripId);
-  if (!trip || trip.status === 'closed') return;
+  if (!trip || !isActiveTrip(trip)) return;
   if (!navigator.geolocation) { showAlert('Este aparelho não oferece localização por GPS.', 'error'); return; }
   if (activeGpsTripId === tripId) { showAlert('O GPS já está acompanhando esta rota.'); return; }
   stopGpsTracking(); activeGpsTripId = tripId; showAlert('Solicitando permissão de localização…');
@@ -320,7 +332,7 @@ function viewRouteMap(tripId) {
 // ─── NOVA VIAGEM ──────────────────────────────────────────────────────────────
 function renderViagem(c) {
   const drivers = DB.drivers().filter(d => d.status === 'ativo');
-  const openTrips = DB.trips().filter(t => !t.endTime);
+  const openTrips = DB.trips().filter(isActiveTrip);
   c.innerHTML = alertHTML() + pageHero('ti-route', 'Operação externa', 'Nova rota', 'Registre a saída para um novo atendimento.', 'Rotas') +
     (openTrips.length ? '<div class="card"><div class="card-title"><i class="ti ti-progress-check"></i> Atendimento em andamento</div>' +
       openTrips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="confirmFinishRoute(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-building"></i>' + escapeHTML(t.destination || '-') + '</span><span><i class="ti ti-clock"></i>' + fmt(t.startTime) + '</span></div></div><span class="tag tag-open">Em atendimento</span></div>' + gpsStatusMarkup(t) + (Array.isArray(t.routePoints) && t.routePoints.length ? '<div class="gps-route-actions" onclick="event.stopPropagation()"><button class="btn btn-secondary btn-sm" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver localização</button></div>' : '') + '<p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para finalizar esta rota</p></div>').join('') +
@@ -490,7 +502,7 @@ function renderRegistros(c) {
     '</select></div></div>' +
     (filterDate || filterDriver ? '<button class="btn btn-secondary btn-sm" onclick="clearFilter()"><i class="ti ti-x"></i> Limpar filtro</button>' : '') +
     '</div>' +
-    '<div class="stat-grid"><div class="stat"><div class="stat-num">' + trips.length + '</div><div class="stat-label">Viagens</div></div><div class="stat"><div class="stat-num">' + trips.filter(t => t.status === 'open').length + '</div><div class="stat-label">Em aberto</div></div><div class="stat"><div class="stat-num">' + km + '</div><div class="stat-label">KM total</div></div></div>' +
+    '<div class="stat-grid"><div class="stat"><div class="stat-num">' + trips.length + '</div><div class="stat-label">Viagens</div></div><div class="stat"><div class="stat-num">' + trips.filter(isActiveTrip).length + '</div><div class="stat-label">Em aberto</div></div><div class="stat"><div class="stat-num">' + km + '</div><div class="stat-label">KM total</div></div></div>' +
     (trips.length === 0 ? '<div class="empty"><i class="ti ti-map-off"></i>Nenhum registro encontrado</div>' : '') +
     trips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="viewTrip(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-calendar"></i>' + fmtDate(t.startTime) + '</span><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-user"></i>' + escapeHTML(t.client || 'Cliente não informado') + '</span><span><i class="ti ti-map-pin"></i>' + escapeHTML(t.destination || '-') + '</span>' + (t.kmStart ? '<span><i class="ti ti-road"></i>' + t.kmStart + ' → ' + (t.kmEnd || '?') + ' km</span>' : '') + '</div><div class="trip-meta" style="margin-top:4px"><span><i class="ti ti-clock"></i>Saída: ' + fmt(t.startTime) + '</span>' + (t.endTime ? '<span><i class="ti ti-flag"></i>Chegada: ' + fmt(t.endTime) + '</span>' : '') + '</div></div><span class="tag ' + (t.status === 'open' ? 'tag-open' : 'tag-closed') + '">' + (t.status === 'open' ? 'Em atendimento' : 'Concluída') + '</span></div><p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para ver os detalhes</p></div>').join('');
 }
@@ -499,7 +511,7 @@ function viewTrip(tripId) {
   const t = DB.trips().find(item => item.id === tripId); if (!t) return;
   const odometerKm = t.kmStart && t.kmEnd ? Math.max(0, Number(t.kmEnd) - Number(t.kmStart)) : null;
   const consumption = t.fuelLiters && odometerKm !== null ? (odometerKm / Number(t.fuelLiters)).toFixed(2) : null;
-  const actions = (t.status === 'open' ? '<button class="btn btn-primary" onclick="confirmFinishRoute(' + t.id + ')"><i class="ti ti-circle-check"></i> Finalizar rota</button>' : '') + ((t.routePoints || []).length ? '<button class="btn btn-secondary" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver trajeto</button>' : '') + (isAdmin() ? '<button class="btn btn-secondary" onclick="editTrip(' + t.id + ')"><i class="ti ti-edit"></i> Editar registro</button><button class="btn btn-danger" onclick="deleteTrip(' + t.id + ')"><i class="ti ti-trash"></i> Excluir registro</button>' : '') + (t.photoStart || t.photoEnd ? '<button class="btn btn-secondary" onclick="viewPhotos(' + t.id + ')"><i class="ti ti-photo"></i> Ver fotos</button>' : '') + (t.changeLog?.length ? '<button class="btn btn-secondary" onclick="viewTripHistory(' + t.id + ')"><i class="ti ti-history"></i> Histórico</button>' : '');
+  const actions = (isActiveTrip(t) ? '<button class="btn btn-primary" onclick="confirmFinishRoute(' + t.id + ')"><i class="ti ti-circle-check"></i> Finalizar rota</button>' : '') + ((t.routePoints || []).length ? '<button class="btn btn-secondary" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver trajeto</button>' : '') + (isAdmin() ? '<button class="btn btn-secondary" onclick="editTrip(' + t.id + ')"><i class="ti ti-edit"></i> Editar registro</button><button class="btn btn-danger" onclick="deleteTrip(' + t.id + ')"><i class="ti ti-trash"></i> Excluir registro</button>' : '') + (t.photoStart || t.photoEnd ? '<button class="btn btn-secondary" onclick="viewPhotos(' + t.id + ')"><i class="ti ti-photo"></i> Ver fotos</button>' : '') + (t.changeLog?.length ? '<button class="btn btn-secondary" onclick="viewTripHistory(' + t.id + ')"><i class="ti ti-history"></i> Histórico</button>' : '');
   document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Detalhes da rota<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>' + escapeHTML(t.client || 'Cliente não informado') + '</strong><div class="trip-meta"><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || 'Não informada') + '</span><span><i class="ti ti-map-pin"></i>Local: ' + escapeHTML(t.destination || 'Não informado') + '</span><span><i class="ti ti-car"></i>' + escapeHTML(vehicleLabel(t.vehicle)) + '</span><span><i class="ti ti-road"></i>' + escapeHTML(t.kmStart || '-') + ' → ' + escapeHTML(t.kmEnd || '-') + ' km</span></div></div>' + gpsStatusMarkup(t) + (consumption ? '<div class="trip-consumption"><span><i class="ti ti-gas-station"></i> Consumo médio</span><strong>' + consumption.replace('.', ',') + ' km/l</strong><small>' + Number(t.fuelLiters).toLocaleString('pt-BR') + ' L abastecidos' + (t.fuelCost ? ' · R$ ' + Number(t.fuelCost).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '') + '</small></div>' : '') + '<div class="confirm-actions">' + actions + '</div></div></div>';
 }
 
@@ -807,7 +819,7 @@ async function initApp() {
   const loadingRemote = USE_SUPABASE && navigator.onLine;
   if (loadingRemote) document.getElementById('main-content').innerHTML = '<div class="startup-loading"><i class="ti ti-loader-2"></i><strong>Atualizando rotas</strong><span>Conferindo os dados mais recentes da frota…</span></div>';
   else showTab('visao');
-  try { await DB.load(); await loadAdminSession(); const sync = await DB.syncPending(); if (sync.synced) console.info('Sincronização offline concluída:', sync.synced); }
+  try { await DB.load(); const archived = await archiveStaleOpenTrips(); if (archived) console.info('Rotas antigas arquivadas:', archived); await loadAdminSession(); const sync = await DB.syncPending(); if (sync.synced) console.info('Sincronização offline concluída:', sync.synced); }
   catch (error) { console.warn('Falha ao carregar Supabase, usando dados locais.', error); showAlert('Falha ao carregar Supabase. Usando dados locais.', 'error'); }
   finally { showTab('visao'); }
 }
