@@ -97,9 +97,10 @@ async function loadTable(key, table){
     try {
       const data = await fetchTable(table);
       if(Array.isArray(data) && data.length) return data;
-      const localData = loadLocal(key);
-      if(Array.isArray(localData) && localData.length) return localData;
       if(key === 'drivers' && data.length === 0) return DEFAULT_DRIVERS;
+      // Uma resposta remota vazia ainda é uma resposta válida. Usar dados
+      // locais nesse caso fazia rotas antigas reaparecerem como abertas.
+      if(Array.isArray(data)) return data;
       return data;
     } catch (error) {
       console.warn(`Supabase load failed for ${table}:`, error);

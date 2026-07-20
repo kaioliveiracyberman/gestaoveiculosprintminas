@@ -800,10 +800,13 @@ async function initApp() {
   setupTheme();
   new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => { if (node.nodeType === 1) { if (node.matches?.('select')) enhanceSelects(node.parentElement); else enhanceSelects(node); } }))).observe(document.body, { childList: true, subtree: true });
   setupPWA();
-  // Não bloqueia a tela enquanto o Supabase responde. A atualização ocorre
-  // assim que a carga remota terminar ou atingir o limite de espera.
   DB.hydrateLocal();
-  showTab('visao');
+  // Quando há internet, evita exibir por instantes uma rota antiga do cache
+  // local como se ainda estivesse em andamento. O cache continua sendo usado
+  // imediatamente quando o aparelho estiver offline.
+  const loadingRemote = USE_SUPABASE && navigator.onLine;
+  if (loadingRemote) document.getElementById('main-content').innerHTML = '<div class="startup-loading"><i class="ti ti-loader-2"></i><strong>Atualizando rotas</strong><span>Conferindo os dados mais recentes da frota…</span></div>';
+  else showTab('visao');
   try { await DB.load(); await loadAdminSession(); const sync = await DB.syncPending(); if (sync.synced) console.info('Sincronização offline concluída:', sync.synced); }
   catch (error) { console.warn('Falha ao carregar Supabase, usando dados locais.', error); showAlert('Falha ao carregar Supabase. Usando dados locais.', 'error'); }
   finally { showTab('visao'); }
