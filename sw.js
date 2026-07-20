@@ -1,4 +1,4 @@
-const CACHE_NAME='print-minas-frota-v5';
+const CACHE_NAME='print-minas-frota-v6';
 const APP_SHELL=['./','index.html','css/style.css','css/base.css','css/layout.css','manifest.webmanifest','assets/logo-printminas.png','js/config.js','js/db.js','js/app.js'];
 
 self.addEventListener('install',event=>{

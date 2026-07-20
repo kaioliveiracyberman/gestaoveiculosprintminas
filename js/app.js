@@ -230,7 +230,7 @@ function renderVisaoGeral(c) {
     '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver ocorrências"><div class="stat-icon ic-coral"><i class="ti ti-alert-triangle"></i></div><p class="stat-num-ov">' + monthIncidents + '</p><p class="stat-label-ov">Ocorr\u00eancias no m\u00eas</p></button>' +
     '<button class="stat-card-ov stat-action" onclick="showTab(\'ocorrencias\')" title="Ver chamados que bloqueiam veículos"><div class="stat-icon ic-coral"><i class="ti ti-lock"></i></div><p class="stat-num-ov">' + openBlocks + '</p><p class="stat-label-ov">Ve\u00edculos bloqueados</p></button>' +
     '</div></section>' +
-    (ongoingRoutes.length ? '<div class="activity-card ongoing-routes-card"><div class="activity-title"><span><i class="ti ti-progress-check"></i> Rotas em andamento</span><button class="btn btn-secondary btn-sm" onclick="showTab(\'viagem\')">Ver rotas</button></div>' + ongoingRoutes.map(t => '<button class="ongoing-route" onclick="showTab(\'viagem\')"><span class="ongoing-route-icon"><i class="ti ti-route-2"></i></span><span class="ongoing-route-info"><strong>' + escapeHTML(t.driverName) + '</strong><small>' + escapeHTML(vehicleLabel(t.vehicle)) + (t.client ? ' · ' + escapeHTML(t.client) : t.destination ? ' · ' + escapeHTML(t.destination) : '') + '</small></span><span class="ongoing-route-time">há ' + formatElapsedTime(t.startTime) + '</span><i class="ti ti-chevron-right"></i></button>').join('') + '</div>' : '') +
+    (ongoingRoutes.length ? '<div class="activity-card ongoing-routes-card"><div class="activity-title"><span><i class="ti ti-progress-check"></i> Rotas em andamento</span><button class="btn btn-secondary btn-sm" onclick="showTab(\'viagem\')">Ver rotas</button></div>' + ongoingRoutes.map(t => '<button class="ongoing-route" onclick="' + ((t.routePoints || []).length ? 'viewRouteMap(' + t.id + ')' : 'showTab(\\\'viagem\\\')') + '"><span class="ongoing-route-icon"><i class="ti ti-' + ((t.routePoints || []).length ? 'map-pin-filled' : 'route-2') + '"></i></span><span class="ongoing-route-info"><strong>' + escapeHTML(t.driverName) + '</strong><small>' + escapeHTML(vehicleLabel(t.vehicle)) + (t.client ? ' · ' + escapeHTML(t.client) : t.destination ? ' · ' + escapeHTML(t.destination) : '') + ((t.routePoints || []).length ? ' · localização disponível' : '') + '</small></span><span class="ongoing-route-time">' + ((t.routePoints || []).length ? 'Ver mapa' : 'há ' + formatElapsedTime(t.startTime)) + '</span><i class="ti ti-chevron-right"></i></button>').join('') + '</div>' : '') +
     '<div class="activity-card">' +
     '<p class="activity-title">Atividades recentes</p>' +
     (feed.length === 0 ? '<div class="empty"><i class="ti ti-map-off"></i>Nenhuma atividade registrada ainda</div>' :
@@ -276,13 +276,54 @@ function printPdfPreview() {
   frame.contentWindow.focus(); frame.contentWindow.print();
 }
 
+// ─── GPS DA ROTA ───────────────────────────────────────────────────────────
+let activeGpsWatchId = null, activeGpsTripId = null, lastGpsRemoteSaveAt = 0;
+function haversineKm(a, b) { if (!a || !b) return 0; const rad = value => value * Math.PI / 180, earth = 6371, dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng), h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2; return earth * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)); }
+function gpsDistanceKm(trip) { return Number(trip?.gpsDistanceKm || 0); }
+function stopGpsTracking(tripId) { if (tripId && activeGpsTripId !== tripId) return; if (activeGpsWatchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(activeGpsWatchId); activeGpsWatchId = null; activeGpsTripId = null; }
+async function persistGpsPoint(trip, remote = false) { DB.save('trips', DB.trips()); if (remote && USE_SUPABASE) await DB.saveOne('trips', trip); }
+function startGpsTracking(tripId) {
+  const trip = DB.trips().find(item => item.id === tripId);
+  if (!trip || trip.status === 'closed') return;
+  if (!navigator.geolocation) { showAlert('Este aparelho não oferece localização por GPS.', 'error'); return; }
+  if (activeGpsTripId === tripId) { showAlert('O GPS já está acompanhando esta rota.'); return; }
+  stopGpsTracking(); activeGpsTripId = tripId; showAlert('Solicitando permissão de localização…');
+  activeGpsWatchId = navigator.geolocation.watchPosition(async position => {
+    const current = { lat: Number(position.coords.latitude.toFixed(7)), lng: Number(position.coords.longitude.toFixed(7)), accuracy: Math.round(position.coords.accuracy || 0), at: new Date(position.timestamp || Date.now()).toISOString() };
+    if (current.accuracy > 120) return;
+    const points = Array.isArray(trip.routePoints) ? trip.routePoints : [], previous = points[points.length - 1], delta = previous ? haversineKm(previous, current) : 0;
+    if (previous && delta < 0.008) return;
+    trip.routePoints = [...points.slice(-499), current]; trip.gpsDistanceKm = Number((gpsDistanceKm(trip) + delta).toFixed(2)); trip.gpsLastLat = current.lat; trip.gpsLastLng = current.lng; trip.gpsLastAt = current.at;
+    const syncNow = Date.now() - lastGpsRemoteSaveAt > 25000; if (syncNow) lastGpsRemoteSaveAt = Date.now();
+    try { await persistGpsPoint(trip, syncNow); } catch (error) { console.warn('Falha ao sincronizar posição GPS.', error); }
+    if (activeTab === 'viagem') renderViagem(document.getElementById('main-content'));
+    if (activeTab === 'visao') renderVisaoGeral(document.getElementById('main-content'));
+  }, error => { stopGpsTracking(tripId); const messages = { 1: 'Permita a localização para acompanhar a rota.', 2: 'Não foi possível obter a localização agora.', 3: 'A localização demorou para responder. Tente novamente.' }; showAlert(messages[error.code] || 'Não foi possível iniciar o GPS.', 'error'); }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+}
+function gpsStatusMarkup(trip) { const points = Array.isArray(trip.routePoints) ? trip.routePoints.length : 0, live = activeGpsTripId === trip.id && activeGpsWatchId !== null; return '<div class="gps-route-status ' + (live ? 'is-live' : '') + '"><span><i class="ti ti-' + (live ? 'broadcast' : 'map-pin') + '"></i> ' + (live ? 'GPS acompanhando' : points ? 'GPS pausado' : 'GPS não iniciado') + '</span><strong>' + gpsDistanceKm(trip).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' km</strong>' + (trip.gpsLastAt ? '<small>última posição ' + fmt(trip.gpsLastAt) + '</small>' : '') + '</div>'; }
+function viewRouteMap(tripId) {
+  const trip = DB.trips().find(item => item.id === tripId), points = trip?.routePoints || [];
+  if (!trip || !points.length) { showAlert('Ainda não há posição GPS registrada para esta rota.', 'error'); return; }
+  document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal modal-wide route-map-modal"><div class="modal-title"><span><i class="ti ti-map-2"></i> Trajeto registrado</span><button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="route-map-meta"><strong>' + escapeHTML(trip.driverName) + '</strong><span>' + escapeHTML(vehicleLabel(trip.vehicle)) + ' · ' + gpsDistanceKm(trip).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' km GPS</span></div><div id="route-map-canvas" class="route-map-canvas"></div><p class="route-map-note"><i class="ti ti-info-circle"></i> Linha baseada nas posições enviadas pelo celular durante a rota.</p></div></div>';
+  setTimeout(() => {
+    if (!window.L) { showAlert('O mapa precisa de conexão com a internet para carregar.', 'error'); return; }
+    const map = L.map('route-map-canvas', { zoomControl: true, attributionControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    const route = points.map(point => [point.lat, point.lng]);
+    const line = route.length > 1 ? L.polyline(route, { color: '#F26419', weight: 5, opacity: .9 }).addTo(map) : null;
+    L.circleMarker(route[0], { radius: 8, color: '#fff', weight: 3, fillColor: '#1C7C45', fillOpacity: 1 }).bindPopup('Saída registrada').addTo(map);
+    L.circleMarker(route[route.length - 1], { radius: 8, color: '#fff', weight: 3, fillColor: '#F26419', fillOpacity: 1 }).bindPopup(trip.status === 'closed' ? 'Última posição da rota' : 'Posição atual').addTo(map);
+    if (line) map.fitBounds(line.getBounds(), { padding: [28, 28], maxZoom: 16 }); else map.setView(route[0], 16);
+  }, 80);
+}
+
 // ─── NOVA VIAGEM ──────────────────────────────────────────────────────────────
 function renderViagem(c) {
   const drivers = DB.drivers().filter(d => d.status === 'ativo');
   const openTrips = DB.trips().filter(t => !t.endTime);
   c.innerHTML = alertHTML() + pageHero('ti-route', 'Operação externa', 'Nova rota', 'Registre a saída para um novo atendimento.', 'Rotas') +
     (openTrips.length ? '<div class="card"><div class="card-title"><i class="ti ti-progress-check"></i> Atendimento em andamento</div>' +
-      openTrips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="confirmFinishRoute(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-building"></i>' + escapeHTML(t.destination || '-') + '</span><span><i class="ti ti-clock"></i>' + fmt(t.startTime) + '</span></div></div><span class="tag tag-open">Em atendimento</span></div><p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para finalizar esta rota</p></div>').join('') +
+      openTrips.map(t => '<div class="trip-row clickable-card" role="button" tabindex="0" onclick="confirmFinishRoute(' + t.id + ')"><div class="trip-header"><div><div class="trip-name">' + escapeHTML(t.driverName) + '</div><div class="trip-meta"><span><i class="ti ti-car"></i>' + vehicleLabel(t.vehicle) + '</span><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || '-') + '</span><span><i class="ti ti-building"></i>' + escapeHTML(t.destination || '-') + '</span><span><i class="ti ti-clock"></i>' + fmt(t.startTime) + '</span></div></div><span class="tag tag-open">Em atendimento</span></div>' + gpsStatusMarkup(t) + (Array.isArray(t.routePoints) && t.routePoints.length ? '<div class="gps-route-actions" onclick="event.stopPropagation()"><button class="btn btn-secondary btn-sm" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver localização</button></div>' : '') + '<p class="card-tap-hint"><i class="ti ti-hand-click"></i> Toque para finalizar esta rota</p></div>').join('') +
       '</div>' : '') +
     '<div class="card"><div class="card-title"><i class="ti ti-route"></i> Nova rota</div>' +
     '<div class="field"><label>Motorista</label><select id="v-driver"><option value="">Selecione o motorista...</option>' +
@@ -301,6 +342,7 @@ function renderViagem(c) {
     '<button class="btn btn-primary btn-operation-start" id="start-trip-button" style="width:100%" onclick="startTrip(this)"><i class="ti ti-player-play"></i> Iniciar deslocamento para o atendimento</button></div>';
   renderAttendanceTimer(c, openTrips);
   updateVehicleAvailability();
+  if (openTrips.length && activeGpsTripId === null) startGpsTracking(openTrips[0].id);
 }
 
 let attendanceTimerInterval = null;
@@ -346,18 +388,23 @@ async function startTrip(btn) {
   if (availability) { showAlert(availability, 'error'); updateVehicleAvailability(); return; }
   const date = document.getElementById('v-date').value, time = document.getElementById('v-time').value;
   const photo = document.getElementById('prev-start');
-  const trip = { id: genId(), driverId: parseInt(driverId), driverName: driver.name, vehicle, os: document.getElementById('v-os').value.trim(), client: document.getElementById('v-client').value.trim(), destination: document.getElementById('v-dest').value.trim(), startTime: new Date(date + 'T' + time).toISOString(), endTime: null, kmStart: document.getElementById('v-km-start').value, kmEnd: null, photoStart: photo && photo.style.display !== 'none' ? photo.src : null, photoEnd: null, obsStart: document.getElementById('v-obs').value.trim(), obsEnd: '', status: 'open' };
+  const trip = { id: genId(), driverId: parseInt(driverId), driverName: driver.name, vehicle, os: document.getElementById('v-os').value.trim(), client: document.getElementById('v-client').value.trim(), destination: document.getElementById('v-dest').value.trim(), startTime: new Date(date + 'T' + time).toISOString(), endTime: null, kmStart: document.getElementById('v-km-start').value, kmEnd: null, photoStart: photo && photo.style.display !== 'none' ? photo.src : null, photoEnd: null, obsStart: document.getElementById('v-obs').value.trim(), obsEnd: '', routePoints: [], gpsDistanceKm: 0, gpsLastLat: null, gpsLastLng: null, gpsLastAt: null, status: 'open' };
   _saving = true; setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
   let ok = true;
   try { const trips = DB.trips(); trips.push(trip); DB.save('trips', trips); if (USE_SUPABASE) { ok = await DB.saveOne('trips', trip); } }
   catch (err) { console.error('Erro ao registrar sa\u00edda:', err); ok = false; }
   finally { _saving = false; setBusy(btn, false); }
-  if (ok) { await refreshFromServer(); showAlert('Rota iniciada com sucesso!'); }
+  if (ok) { await refreshFromServer(); startGpsTracking(trip.id); showAlert('Rota iniciada com sucesso!'); }
   else { const detail = window.__LAST_SUPABASE_ERROR__?.message || 'Verifique a conexão e a atualização da tabela no Supabase.'; showAlert('A rota foi salva neste aparelho, mas não no Supabase: ' + detail, 'error'); }
 }
 
 function openArrival(tripId) {
   const trip = DB.trips().find(t => t.id === tripId); if (!trip) return;
+  setTimeout(() => {
+    const kmInput = document.getElementById('arr-km');
+    if (!kmInput || document.getElementById('arr-fuel-liters')) return;
+    kmInput.closest('.field').insertAdjacentHTML('afterend', '<div class="row fuel-fields"><div class="field"><label>Litros abastecidos <small>(opcional)</small></label><input type="number" id="arr-fuel-liters" min="0" step="0.01" placeholder="Ex: 32,5"></div><div class="field"><label>Valor abastecido <small>(opcional)</small></label><input type="number" id="arr-fuel-cost" min="0" step="0.01" placeholder="Ex: 180,00"></div></div>');
+  }, 0);
   document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Finalizar atendimento<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>' + escapeHTML(trip.driverName) + '</strong> · ' + escapeHTML(vehicleLabel(trip.vehicle)) + '<div class="trip-meta"><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(trip.os || 'Não informada') + '</span><span><i class="ti ti-user"></i>Cliente: ' + escapeHTML(trip.client || 'Não informado') + '</span><span><i class="ti ti-building"></i>Local: ' + escapeHTML(trip.destination || 'Não informado') + '</span><span><i class="ti ti-clock"></i>Saída: ' + fmtTime(trip.startTime) + '</span></div></div><div class="row"><div class="field"><label>Data de retorno</label><input type="date" id="arr-date" value="' + new Date().toISOString().split('T')[0] + '"></div><div class="field"><label>Horário de retorno</label><input type="time" id="arr-time" value="' + new Date().toTimeString().slice(0, 5) + '"></div></div><div class="field"><label>KM no retorno</label><input type="number" id="arr-km" placeholder="Ex: 45510"></div><div class="field"><label>Foto do painel no retorno</label><div class="photo-area" onclick="document.getElementById(\'arr-photo\').click()"><i class="ti ti-camera" style="font-size:24px;display:block;margin-bottom:5px"></i>Toque para fotografar o painel<input type="file" id="arr-photo" accept="image/*" capture="environment" style="display:none" onchange="previewPhoto(this,\'arr-prev\')"></div><img id="arr-prev" class="photo-preview" style="display:none"></div><div class="field"><label>Resumo do atendimento realizado</label><textarea id="arr-obs" placeholder="Serviço realizado, impressoras atendidas e qualquer ocorrência..."></textarea></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-operation-start" style="flex:1" onclick="closeTrip(' + tripId + ', this)"><i class="ti ti-circle-check"></i> Concluir atendimento e registrar retorno</button><button class="btn btn-secondary" onclick="closeModal()">Cancelar</button></div></div></div>';
 }
 
@@ -371,7 +418,8 @@ async function closeTrip(tripId, btn) {
   const trips = DB.trips(), trip = trips.find(t => t.id === tripId); if (!trip) return;
   const date = document.getElementById('arr-date').value, time = document.getElementById('arr-time').value;
   const photo = document.getElementById('arr-prev');
-  trip.endTime = new Date(date + 'T' + time).toISOString(); trip.kmEnd = document.getElementById('arr-km').value; trip.photoEnd = photo && photo.style.display !== 'none' ? photo.src : null; trip.obsEnd = document.getElementById('arr-obs').value; trip.status = 'closed';
+  stopGpsTracking(tripId);
+  trip.endTime = new Date(date + 'T' + time).toISOString(); trip.kmEnd = document.getElementById('arr-km').value; trip.photoEnd = photo && photo.style.display !== 'none' ? photo.src : null; trip.obsEnd = document.getElementById('arr-obs').value; trip.fuelLiters = document.getElementById('arr-fuel-liters')?.value || null; trip.fuelCost = document.getElementById('arr-fuel-cost')?.value || null; trip.status = 'closed';
   _saving = true; setBusy(btn, true, '<i class="ti ti-loader"></i> Salvando...');
   let ok = true;
   try { DB.save('trips', trips); if (USE_SUPABASE) { ok = await DB.saveOne('trips', trip); } }
@@ -449,8 +497,10 @@ function renderRegistros(c) {
 
 function viewTrip(tripId) {
   const t = DB.trips().find(item => item.id === tripId); if (!t) return;
-  const actions = (t.status === 'open' ? '<button class="btn btn-primary" onclick="confirmFinishRoute(' + t.id + ')"><i class="ti ti-circle-check"></i> Finalizar rota</button>' : '') + (isAdmin() ? '<button class="btn btn-secondary" onclick="editTrip(' + t.id + ')"><i class="ti ti-edit"></i> Editar registro</button><button class="btn btn-danger" onclick="deleteTrip(' + t.id + ')"><i class="ti ti-trash"></i> Excluir registro</button>' : '') + (t.photoStart || t.photoEnd ? '<button class="btn btn-secondary" onclick="viewPhotos(' + t.id + ')"><i class="ti ti-photo"></i> Ver fotos</button>' : '') + (t.changeLog?.length ? '<button class="btn btn-secondary" onclick="viewTripHistory(' + t.id + ')"><i class="ti ti-history"></i> Histórico</button>' : '');
-  document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Detalhes da rota<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>' + escapeHTML(t.client || 'Cliente não informado') + '</strong><div class="trip-meta"><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || 'Não informada') + '</span><span><i class="ti ti-map-pin"></i>Local: ' + escapeHTML(t.destination || 'Não informado') + '</span><span><i class="ti ti-car"></i>' + escapeHTML(vehicleLabel(t.vehicle)) + '</span><span><i class="ti ti-road"></i>' + escapeHTML(t.kmStart || '-') + ' → ' + escapeHTML(t.kmEnd || '-') + ' km</span></div></div><div class="confirm-actions">' + actions + '</div></div></div>';
+  const odometerKm = t.kmStart && t.kmEnd ? Math.max(0, Number(t.kmEnd) - Number(t.kmStart)) : null;
+  const consumption = t.fuelLiters && odometerKm !== null ? (odometerKm / Number(t.fuelLiters)).toFixed(2) : null;
+  const actions = (t.status === 'open' ? '<button class="btn btn-primary" onclick="confirmFinishRoute(' + t.id + ')"><i class="ti ti-circle-check"></i> Finalizar rota</button>' : '') + ((t.routePoints || []).length ? '<button class="btn btn-secondary" onclick="viewRouteMap(' + t.id + ')"><i class="ti ti-map-2"></i> Ver trajeto</button>' : '') + (isAdmin() ? '<button class="btn btn-secondary" onclick="editTrip(' + t.id + ')"><i class="ti ti-edit"></i> Editar registro</button><button class="btn btn-danger" onclick="deleteTrip(' + t.id + ')"><i class="ti ti-trash"></i> Excluir registro</button>' : '') + (t.photoStart || t.photoEnd ? '<button class="btn btn-secondary" onclick="viewPhotos(' + t.id + ')"><i class="ti ti-photo"></i> Ver fotos</button>' : '') + (t.changeLog?.length ? '<button class="btn btn-secondary" onclick="viewTripHistory(' + t.id + ')"><i class="ti ti-history"></i> Histórico</button>' : '');
+  document.getElementById('modal-container').innerHTML = '<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-title">Detalhes da rota<button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><div class="operation-meta"><strong>' + escapeHTML(t.client || 'Cliente não informado') + '</strong><div class="trip-meta"><span><i class="ti ti-hash"></i>OS: ' + escapeHTML(t.os || 'Não informada') + '</span><span><i class="ti ti-map-pin"></i>Local: ' + escapeHTML(t.destination || 'Não informado') + '</span><span><i class="ti ti-car"></i>' + escapeHTML(vehicleLabel(t.vehicle)) + '</span><span><i class="ti ti-road"></i>' + escapeHTML(t.kmStart || '-') + ' → ' + escapeHTML(t.kmEnd || '-') + ' km</span></div></div>' + gpsStatusMarkup(t) + (consumption ? '<div class="trip-consumption"><span><i class="ti ti-gas-station"></i> Consumo médio</span><strong>' + consumption.replace('.', ',') + ' km/l</strong><small>' + Number(t.fuelLiters).toLocaleString('pt-BR') + ' L abastecidos' + (t.fuelCost ? ' · R$ ' + Number(t.fuelCost).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '') + '</small></div>' : '') + '<div class="confirm-actions">' + actions + '</div></div></div>';
 }
 
 function viewTripHistory(tripId) {
