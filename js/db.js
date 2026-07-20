@@ -200,6 +200,15 @@ const DB = {
   drivers: () => cacheDrivers,
   incidents: () => cacheIncidents,
 
+  // Mostra o último estado conhecido sem esperar a rede. Isso deixa o
+  // aplicativo utilizável mesmo em áreas de sinal fraco.
+  hydrateLocal(){
+    cacheDrivers = loadLocal('drivers');
+    cacheTrips = loadLocal('trips');
+    cacheIncidents = loadLocal('incidents');
+    if(!cacheDrivers.length) cacheDrivers = [...DEFAULT_DRIVERS];
+  },
+
   // Salva a lista inteira no cache + localStorage (instantâneo),
   // mas NÃO regrava a tabela remota inteira. Para o remoto use saveOne/removeOne.
   save(key, data){
@@ -224,7 +233,12 @@ const DB = {
   },
 
   async load(){
-    let drivers = await loadTableSafely('drivers', 'drivers');
+    const [loadedDrivers, trips, incidents] = await Promise.all([
+      loadTableSafely('drivers', 'drivers'),
+      loadTableSafely('trips', 'trips'),
+      loadTableSafely('incidents', 'incidents')
+    ]);
+    let drivers = loadedDrivers;
     let seededDrivers = false;
     if(!Array.isArray(drivers) || drivers.length === 0){
       drivers = DEFAULT_DRIVERS;
@@ -232,8 +246,8 @@ const DB = {
     }
     cacheDrivers = drivers;
 
-    cacheTrips = await loadTableSafely('trips', 'trips');
-    cacheIncidents = await loadTableSafely('incidents', 'incidents');
+    cacheTrips = trips;
+    cacheIncidents = incidents;
 
     saveLocal('drivers', cacheDrivers);
     saveLocal('trips', cacheTrips);
