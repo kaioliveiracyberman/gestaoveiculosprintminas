@@ -1,8 +1,34 @@
 // ─── Logo ────────────────────────────────────────────────────────────────────
 /* Print Minas - Gestão de Frota | Desenvolvido por Kaio Eduardo de Oliveira Barbosa */
-const LOGO_BASE64 = "data:image/png;base64,PLACEHOLDER_LOGO_BASE64";
-function hasValidLogo() { return typeof LOGO_BASE64 === 'string' && LOGO_BASE64.startsWith('data:image') && !LOGO_BASE64.includes('PLACEHOLDER'); }
-function safeAddLogo(doc, x, y, w, h) { if (!hasValidLogo()) return; try { doc.addImage(LOGO_BASE64, 'PNG', x, y, w, h); } catch (err) { console.warn('Logo error', err); } }
+const LOGO_ASSET = 'assets/logo-printminas.png';
+let _pdfLogoPromise = null;
+
+function loadPdfLogo() {
+  if (_pdfLogoPromise) return _pdfLogoPromise;
+  _pdfLogoPromise = fetch(LOGO_ASSET)
+    .then(response => {
+      if (!response.ok) throw new Error('Logo não encontrada');
+      return response.blob();
+    })
+    .then(blob => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }))
+    .catch(error => { console.warn('Não foi possível carregar a logo para o PDF.', error); return null; });
+  return _pdfLogoPromise;
+}
+
+function drawPdfLogo(doc, x, y, w, h, logoData) {
+  if (logoData) {
+    try { doc.addImage(logoData, 'PNG', x, y, w, h); return; } catch (error) { console.warn('Logo error', error); }
+  }
+  // Marca de contingência: mantém a identidade visual mesmo se o navegador estiver sem a imagem em cache.
+  doc.setFillColor(255, 87, 34); doc.roundedRect(x, y, w, h, 3, 3, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(Math.max(8, w * .42));
+  doc.text('PM', x + w / 2, y + h * .64, { align: 'center' });
+}
 
 // ─── jsPDF loader ────────────────────────────────────────────────────────────
 const JSPDF_SOURCES = ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js', 'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js'];
@@ -234,7 +260,21 @@ function compressImage(img) {
   canvas.getContext('2d').drawImage(img, 0, 0, width, height);
   return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
 }
-function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+let activePdfPreviewUrl = null;
+function closeModal() {
+  document.getElementById('modal-container').innerHTML = '';
+  if (activePdfPreviewUrl) { URL.revokeObjectURL(activePdfPreviewUrl); activePdfPreviewUrl = null; }
+}
+function openPdfPreview(doc, title) {
+  if (activePdfPreviewUrl) URL.revokeObjectURL(activePdfPreviewUrl);
+  activePdfPreviewUrl = URL.createObjectURL(doc.output('blob'));
+  document.getElementById('modal-container').innerHTML = '<div class="modal-bg pdf-preview-bg" onclick="if(event.target===this)closeModal()"><div class="modal pdf-preview-modal"><div class="modal-title"><span><i class="ti ti-file-description"></i> ' + escapeHTML(title) + '</span><button class="close-btn" onclick="closeModal()"><i class="ti ti-x"></i></button></div><p class="pdf-preview-helper">Confira o documento e use Imprimir quando estiver pronto.</p><iframe id="pdf-preview-frame" class="pdf-preview-frame" src="' + activePdfPreviewUrl + '" title="Prévia do PDF"></iframe><div class="pdf-preview-actions"><button class="btn btn-secondary" onclick="closeModal()">Voltar</button><button class="btn btn-primary" onclick="printPdfPreview()"><i class="ti ti-printer"></i> Imprimir</button></div></div></div>';
+}
+function printPdfPreview() {
+  const frame = document.getElementById('pdf-preview-frame');
+  if (!frame || !frame.contentWindow) return;
+  frame.contentWindow.focus(); frame.contentWindow.print();
+}
 
 // ─── NOVA VIAGEM ──────────────────────────────────────────────────────────────
 function renderViagem(c) {
@@ -573,9 +613,9 @@ async function printIncident(id) {
   const btn = document.querySelector('[onclick="printIncident(' + id + ')"]');
   setBusy(btn, true, '<i class="ti ti-loader"></i>');
   try {
-    const jsPDF = await loadJsPDF(), doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const jsPDF = await loadJsPDF(), logoData = await loadPdfLogo(), doc = new jsPDF({ unit: 'mm', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(); let y = 0;
-    doc.setFillColor(255, 107, 0); doc.rect(0, 0, W, 32, 'F'); safeAddLogo(doc, 12, 5, 22, 22);
+    doc.setFillColor(28, 29, 31); doc.rect(0, 0, W, 32, 'F'); doc.setFillColor(255, 102, 0); doc.rect(0, 29, W, 3, 'F'); drawPdfLogo(doc, 12, 5, 22, 22, logoData);
     doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.text('Print Minas', 40, 15);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text('Registro de Ocorr\u00eancia \u2014 Gest\u00e3o de Frota', 40, 22);
     y = 44; doc.setTextColor(20, 20, 20);
@@ -596,7 +636,7 @@ async function printIncident(id) {
     doc.text(decl, 18, y + 7);
     const sigY = y + 24; doc.setDrawColor(50, 50, 50); doc.line(20, sigY, 110, sigY); doc.line(124, sigY, W - 20, sigY);
     doc.setFontSize(8.5); doc.setTextColor(80, 80, 80); doc.text('Assinatura \u2014 ' + inc.driverName, 20, sigY + 5); doc.text('Data', 124, sigY + 5);
-    doc.save('ocorrencia-' + inc.driverName.replace(/\s+/g, '_') + '-' + inc.date + '.pdf');
+    openPdfPreview(doc, 'Ocorrência — ' + inc.driverName);
   } catch (e) { console.error('Erro ao gerar PDF', e); alert('N\u00e3o foi poss\u00edvel gerar o PDF.\n\nDetalhe: ' + (e && e.message ? e.message : e)); }
   finally { setBusy(btn, false); }
 }
@@ -661,13 +701,16 @@ async function printDriver(driverId) {
   const btn = document.querySelector('[onclick="printDriver(' + driverId + ')"]');
   setBusy(btn, true, '<i class="ti ti-loader"></i> Gerando...');
   try {
-    const jsPDF = await loadJsPDF(), doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const jsPDF = await loadJsPDF(), logoData = await loadPdfLogo(), doc = new jsPDF({ unit: 'mm', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), margin = 14; let y = 0;
-    function drawHeader() { doc.setFillColor(24, 24, 27); doc.rect(0, 0, W, 34, 'F'); doc.setFillColor(242, 100, 25); doc.rect(0, 31, W, 3, 'F'); safeAddLogo(doc, margin - 2, 6, 21, 21); doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.text('Print Minas', 40, 16); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(220, 220, 225); doc.text('Relatório mensal de rotas', 40, 22); doc.setFontSize(8); doc.text(reportMonthLabel(), W - margin, 16, { align: 'right' }); }
+    function drawHeader() { doc.setFillColor(25, 27, 29); doc.rect(0, 0, W, 37, 'F'); doc.setFillColor(255, 100, 22); doc.rect(0, 34, W, 3, 'F'); drawPdfLogo(doc, margin - 2, 6, 21, 21, logoData); doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.text('Print Minas', 40, 16); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(225, 225, 228); doc.text('Gestão de Frota • Relatório mensal de rotas', 40, 23); doc.setFontSize(8); doc.setTextColor(255, 188, 145); doc.text(reportMonthLabel(), W - margin, 16, { align: 'right' }); doc.setTextColor(210, 210, 215); doc.text('Documento para conferência e assinatura', W - margin, 23, { align: 'right' }); }
     function ensureSpace(needed) { if (y + needed > H - 16) { doc.addPage(); drawHeader(); y = 44; } }
-    drawHeader(); y = 44; doc.setTextColor(20, 20, 20);
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text(driver.name, margin, y); y += 7;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90, 90, 90); doc.text('CNH: ' + (driver.cnh || '-') + '  \u2022  Per\u00edodo: ' + reportMonthLabel(), margin, y); y += 10;
+    drawHeader(); y = 47; doc.setTextColor(20, 20, 20);
+    doc.setFillColor(255, 244, 236); doc.roundedRect(margin, y - 5, W - margin * 2, 19, 3, 3, 'F');
+    doc.setTextColor(210, 78, 10); doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text('CONDUTOR RESPONSÁVEL', margin + 5, y + 1);
+    doc.setTextColor(24, 24, 27); doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text(driver.name, margin + 5, y + 8);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90, 90, 90); doc.text('CNH: ' + (driver.cnh || '-') + ' • Período: ' + reportMonthLabel(), margin + 5, y + 13);
+    y += 24;
     const cardW = (W - margin * 2 - 18) / 4;
     [[String(trips.length), 'Viagens'], [String(completed), 'Conclu\u00eddas'], [km + ' km', 'KM percorridos'], ['R$ ' + fineTotal.toFixed(2).replace('.', ','), 'Multas']].forEach((s, i) => {
       const x = margin + i * (cardW + 6); doc.setFillColor(i === 0 ? 253 : 246, i === 0 ? 239 : 246, i === 0 ? 230 : 244); doc.roundedRect(x, y, cardW, 18, 3, 3, 'F'); doc.setTextColor(i === 0 ? 210 : 35, i === 0 ? 78 : 35, i === 0 ? 10 : 35); doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text(s[0], x + cardW / 2, y + 9, { align: 'center' }); doc.setTextColor(125, 125, 130); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.text(s[1], x + cardW / 2, y + 14.5, { align: 'center' });
@@ -675,7 +718,7 @@ async function printDriver(driverId) {
     y += 28; doc.setTextColor(20, 20, 20);
     if (trips.length) {
       const cols = [{ h: 'Data', w: 18 }, { h: 'OS', w: 24 }, { h: 'Ve\u00edculo', w: 20 }, { h: 'Destino', w: 46 }, { h: 'Sa\u00edda', w: 16 }, { h: 'Chegada', w: 18 }, { h: 'KM', w: 18 }];
-      function drawTH() { doc.setFillColor(240, 240, 238); doc.rect(margin, y, W - margin * 2, 7, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(60, 60, 60); let x = margin + 2; cols.forEach(col => { doc.text(col.h, x, y + 5); x += col.w; }); y += 9; }
+      function drawTH() { doc.setFillColor(39, 41, 43); doc.roundedRect(margin, y, W - margin * 2, 7, 1.5, 1.5, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(255, 255, 255); let x = margin + 2; cols.forEach(col => { doc.text(col.h.toUpperCase(), x, y + 4.8); x += col.w; }); y += 9; }
       drawTH(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(30, 30, 30);
       trips.forEach(t => {
         if (y + 8 > H - 16) { doc.addPage(); drawHeader(); y = 44; drawTH(); }
@@ -697,7 +740,7 @@ async function printDriver(driverId) {
     doc.setFontSize(8.5); doc.setTextColor(80, 80, 80); doc.text('Assinatura \u2014 ' + driver.name, margin + 6, sigY + 5); doc.text('Data', sigSplit + 6, sigY + 5);
     const pageCount = doc.getNumberOfPages();
     for (let page = 1; page <= pageCount; page++) { doc.setPage(page); doc.setDrawColor(225, 225, 220); doc.line(margin, H - 11, W - margin, H - 11); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(125, 125, 125); doc.text('Print Minas \u2022 Relat\u00f3rio mensal \u2022 ' + reportMonthLabel(), margin, H - 6); doc.text('P\u00e1gina ' + page + ' de ' + pageCount, W - margin, H - 6, { align: 'right' }); }
-    doc.save('relatorio-' + driver.name.replace(/\s+/g, '_') + '-' + relMonth + '.pdf');
+    openPdfPreview(doc, 'Relatório de rotas — ' + driver.name);
   } catch (e) { console.error('Erro ao gerar PDF', e); alert('N\u00e3o foi poss\u00edvel gerar o PDF.\n\nDetalhe: ' + (e && e.message ? e.message : e)); }
   finally { setBusy(btn, false); }
 }

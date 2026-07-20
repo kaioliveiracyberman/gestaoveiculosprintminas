@@ -244,6 +244,10 @@ body.dark-theme .report-routes,body.dark-theme .report-table-wrap,body.dark-them
 body.dark-theme .report-routes[open] summary,body.dark-theme .report-table th{background:#202425;border-color:rgba(255,255,255,.08)}
 body.dark-theme .report-route-item,body.dark-theme .activity-row,body.dark-theme .report-table td{border-color:rgba(255,255,255,.065)}
 
+/* Prévia de impressão dentro do sistema */
+.pdf-preview-modal{width:min(960px,100%);max-width:960px;padding:18px}.pdf-preview-helper{margin:-5px 0 12px;color:var(--text-secondary);font-size:12px}.pdf-preview-frame{display:block;width:100%;height:min(70vh,720px);border:1px solid var(--border);border-radius:12px;background:#525252}.pdf-preview-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.pdf-preview-actions .btn{min-width:112px;justify-content:center}
+@media(max-width:640px){.pdf-preview-modal{padding:14px}.pdf-preview-frame{height:65vh;min-height:400px}.pdf-preview-actions .btn{flex:1}}
+
 body.dark-theme input,body.dark-theme select,body.dark-theme textarea,body.dark-theme .custom-select-trigger{background:#202324;color:#F3F1EA;border-color:rgba(255,255,255,.07)}
 body.dark-theme input::placeholder,body.dark-theme textarea::placeholder{color:#777A76}
 body.dark-theme input:focus,body.dark-theme select:focus,body.dark-theme textarea:focus,body.dark-theme .custom-select.open .custom-select-trigger{background:#202324;border-color:#C75319;box-shadow:0 0 0 3px rgba(242,100,25,.16)}
