@@ -1,6 +1,6 @@
 # Print Minas — Gestão de Frota
 
-Aplicação para registro de rotas, retornos, fotos do painel, ocorrências e relatórios da frota.
+Aplicação para registro de rotas.
 
 Desenvolvido por **Kaio Barbosa**.
 
